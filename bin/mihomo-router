@@ -1,0 +1,411 @@
+#!/bin/sh
+
+set -u
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+CONFIG_FILE=${MIHOMO_ROUTER_CONFIG:-/etc/mihomo-router.conf}
+# The administrator-selected config is intentionally dynamic.
+# shellcheck disable=SC1090
+[ -r "$CONFIG_FILE" ] && . "$CONFIG_FILE"
+
+DATA_DIR=${DATA_DIR:-/data/mihomo-router}
+RUN_DIR=${RUN_DIR:-/tmp/mihomo-router}
+SUBSCRIPTION_URL=${SUBSCRIPTION_URL:-}
+SUBSCRIPTION_TLS_INSECURE=${SUBSCRIPTION_TLS_INSECURE:-0}
+SUBSCRIPTION_USER_AGENT=${SUBSCRIPTION_USER_AGENT:-clash.meta}
+CORE_ARCHIVE=${CORE_ARCHIVE:-$DATA_DIR/mihomo.gz}
+CORE_SOURCE=${CORE_SOURCE:-}
+CORE_URL=${CORE_URL:-}
+CORE_SHA256=${CORE_SHA256:-}
+CORE_TLS_INSECURE=${CORE_TLS_INSECURE:-0}
+LAN_CIDRS=${LAN_CIDRS:-192.168.31.0/24}
+BYPASS_CIDRS=${BYPASS_CIDRS:-"0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4"}
+CN_IPSET=${CN_IPSET:-cn_ip}
+MIXED_PORT=${MIXED_PORT:-7890}
+REDIR_PORT=${REDIR_PORT:-7892}
+TPROXY_PORT=${TPROXY_PORT:-7893}
+DNS_PORT=${DNS_PORT:-1053}
+CONTROLLER_ADDRESS=${CONTROLLER_ADDRESS:-127.0.0.1:19090}
+TUN_DEVICE=${TUN_DEVICE:-utun}
+ROUTE_TABLE=${ROUTE_TABLE:-100}
+ROUTE_MARK=${ROUTE_MARK:-0x1ed4}
+BYPASS_MARK=${BYPASS_MARK:-0x1ed6}
+TCP_PORTS=${TCP_PORTS:-22,80,443,8080,8443}
+IPTABLES=${IPTABLES:-iptables}
+IP=${IP:-ip}
+CURL=${CURL:-curl}
+GZIP=${GZIP:-gzip}
+TAR=${TAR:-tar}
+CORE=$RUN_DIR/mihomo
+RUNTIME_CONFIG=$RUN_DIR/config.yaml
+ACTIVE_CONFIG=$DATA_DIR/config.yaml
+PID_FILE=$RUN_DIR/manager.pid
+TCP_CHAIN=MR_TCP
+MARK_CHAIN=MR_MARK
+
+log() {
+	printf '%s\n' "mihomo-router: $*" >&2
+}
+
+die() {
+	log "ERROR: $*"
+	exit 1
+}
+
+ensure_dirs() {
+	mkdir -p "$DATA_DIR" "$RUN_DIR" || die "cannot create data directories"
+	chmod 700 "$DATA_DIR" "$RUN_DIR" 2>/dev/null || :
+}
+
+fetch() {
+	fetch_url=$1
+	fetch_dest=$2
+	fetch_insecure=$3
+	fetch_agent=${4:-}
+	if [ -n "$fetch_agent" ]; then
+		fetch_agent_args="-A $fetch_agent"
+	else
+		fetch_agent_args=
+	fi
+	if [ "$fetch_insecure" = 1 ]; then
+		# Deliberate word splitting: exactly "-A VALUE" or empty.
+		# shellcheck disable=SC2086
+		"$CURL" -kfL $fetch_agent_args --connect-timeout 15 --max-time 120 -o "$fetch_dest" "$fetch_url"
+	else
+		# shellcheck disable=SC2086
+		"$CURL" -fL $fetch_agent_args --connect-timeout 15 --max-time 120 -o "$fetch_dest" "$fetch_url"
+	fi
+}
+
+sha256_file() {
+	sha_file=$1
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$sha_file" | awk '{print $1}'
+	elif command -v openssl >/dev/null 2>&1; then
+		openssl dgst -sha256 "$sha_file" | awk '{print $NF}'
+	else
+		return 1
+	fi
+}
+
+unpack_core() {
+	unpack_input=$1
+	unpack_hint=$2
+	unpack_output=$3
+	case "$unpack_hint" in
+		*.tar.gz|*.tgz)
+			unpack_member=$("$TAR" -tzf "$unpack_input" 2>/dev/null | awk '
+				/(^|\/)(CrashCore|mihomo)$/ { print; exit }
+			')
+			[ -n "$unpack_member" ] || return 1
+			"$TAR" -xOzf "$unpack_input" "$unpack_member" >"$unpack_output" 2>/dev/null
+			;;
+		*.gz) "$GZIP" -dc "$unpack_input" >"$unpack_output" ;;
+		*) cp "$unpack_input" "$unpack_output" ;;
+	esac
+}
+
+prepare_core() {
+	ensure_dirs
+	[ -x "$CORE" ] && return 0
+	core_tmp=$RUN_DIR/mihomo.new
+	rm -f "$core_tmp"
+	if [ -r "$CORE_ARCHIVE" ]; then
+		unpack_core "$CORE_ARCHIVE" "$CORE_ARCHIVE" "$core_tmp" || {
+			rm -f "$core_tmp"
+			die "cannot unpack $CORE_ARCHIVE"
+		}
+	elif [ -n "$CORE_SOURCE" ] && [ -x "$CORE_SOURCE" ]; then
+		cp "$CORE_SOURCE" "$core_tmp" || die "cannot copy $CORE_SOURCE"
+	elif [ -n "$CORE_URL" ]; then
+		archive_tmp=$RUN_DIR/mihomo.download
+		[ "$CORE_TLS_INSECURE" != 1 ] || [ -n "$CORE_SHA256" ] || die "CORE_TLS_INSECURE=1 requires CORE_SHA256"
+		fetch "$CORE_URL" "$archive_tmp" "$CORE_TLS_INSECURE" || {
+			rm -f "$archive_tmp"
+			die "core download failed"
+		}
+		if [ -n "$CORE_SHA256" ]; then
+			archive_sha=$(sha256_file "$archive_tmp") || die "no SHA-256 tool available"
+			[ "$archive_sha" = "$CORE_SHA256" ] || {
+				rm -f "$archive_tmp"
+				die "core SHA-256 mismatch"
+			}
+		fi
+		unpack_core "$archive_tmp" "$CORE_URL" "$core_tmp" || {
+			rm -f "$archive_tmp" "$core_tmp"
+			die "downloaded core archive is invalid"
+		}
+		rm -f "$archive_tmp"
+	else
+		die "no core available; configure CORE_ARCHIVE or CORE_URL"
+	fi
+	chmod 755 "$core_tmp" || die "cannot make core executable"
+	mv "$core_tmp" "$CORE" || die "cannot activate core"
+}
+
+normalize_config() {
+	normalize_input=$1
+	normalize_output=$2
+	awk -v mixed="$MIXED_PORT" -v redir="$REDIR_PORT" -v tproxy="$TPROXY_PORT" -v dns_port="$DNS_PORT" -v tun="$TUN_DEVICE" -v controller="$CONTROLLER_ADDRESS" '
+	BEGIN { in_dns=0; seen_mixed=0; seen_redir=0; seen_tproxy=0; seen_tun=0; seen_controller=0 }
+	/^[^[:space:]#]/ { in_dns=0 }
+	/^dns:[[:space:]]*$/ {
+		print
+		print "    listen: 0.0.0.0:" dns_port
+		in_dns=1
+		next
+	}
+	in_dns && /^[[:space:]]+listen:/ { next }
+	/^mixed-port:/ { print "mixed-port: " mixed; seen_mixed=1; next }
+	/^redir-port:/ { print "redir-port: " redir; seen_redir=1; next }
+	/^tproxy-port:/ { print "tproxy-port: " tproxy; seen_tproxy=1; next }
+	/^external-controller:/ { print "external-controller: \047" controller "\047"; seen_controller=1; next }
+	/^tun:/ {
+		print "tun: {enable: true, stack: system, device: " tun ", auto-route: false, auto-detect-interface: false, dns-hijack: []}"
+		seen_tun=1
+		skip_tun=1
+		next
+	}
+	skip_tun && /^[[:space:]]/ { next }
+	skip_tun { skip_tun=0 }
+	{ print }
+	END {
+		if (!seen_mixed) print "mixed-port: " mixed
+		if (!seen_redir) print "redir-port: " redir
+		if (!seen_tproxy) print "tproxy-port: " tproxy
+		if (!seen_controller) print "external-controller: \047" controller "\047"
+		if (!seen_tun) print "tun: {enable: true, stack: system, device: " tun ", auto-route: false, auto-detect-interface: false, dns-hijack: []}"
+	}' "$normalize_input" >"$normalize_output"
+}
+
+validate_config() {
+	validate_file=$1
+	prepare_core
+	"$CORE" -t -d "$RUN_DIR" -f "$validate_file"
+}
+
+update_config() {
+	[ -n "$SUBSCRIPTION_URL" ] || die "SUBSCRIPTION_URL is empty"
+	ensure_dirs
+	download_tmp=$RUN_DIR/subscription.yaml.new
+	candidate_tmp=$RUN_DIR/config.yaml.new
+	rm -f "$download_tmp" "$candidate_tmp"
+	log "downloading subscription"
+	fetch "$SUBSCRIPTION_URL" "$download_tmp" "$SUBSCRIPTION_TLS_INSECURE" "$SUBSCRIPTION_USER_AGENT" || {
+		rm -f "$download_tmp"
+		die "subscription download failed; active config unchanged"
+	}
+	normalize_config "$download_tmp" "$candidate_tmp" || {
+		rm -f "$download_tmp" "$candidate_tmp"
+		die "cannot normalize subscription"
+	}
+	rm -f "$download_tmp"
+	validate_config "$candidate_tmp" || {
+		rm -f "$candidate_tmp"
+		die "subscription config rejected by Mihomo; active config unchanged"
+	}
+	chmod 600 "$candidate_tmp" 2>/dev/null || :
+	mv "$candidate_tmp" "$ACTIVE_CONFIG" || die "cannot activate config"
+	log "configuration updated"
+}
+
+copy_runtime_config() {
+	[ -r "$ACTIVE_CONFIG" ] || die "missing $ACTIVE_CONFIG; run update first"
+	cp "$ACTIVE_CONFIG" "$RUNTIME_CONFIG.new" || die "cannot stage config"
+	mv "$RUNTIME_CONFIG.new" "$RUNTIME_CONFIG" || die "cannot activate runtime config"
+}
+
+iptables_delete_all() {
+	delete_table=$1
+	delete_chain=$2
+	"$IPTABLES" -t "$delete_table" -F "$delete_chain" >/dev/null 2>&1 || :
+	"$IPTABLES" -t "$delete_table" -X "$delete_chain" >/dev/null 2>&1 || :
+}
+
+firewall_down() {
+	while "$IPTABLES" -t nat -C PREROUTING -p tcp -m multiport --dports "$TCP_PORTS" -j "$TCP_CHAIN" >/dev/null 2>&1; do
+		"$IPTABLES" -t nat -D PREROUTING -p tcp -m multiport --dports "$TCP_PORTS" -j "$TCP_CHAIN" >/dev/null 2>&1 || break
+	done
+	while "$IPTABLES" -t mangle -C PREROUTING -p udp -m multiport --dports "$TCP_PORTS" -j "$MARK_CHAIN" >/dev/null 2>&1; do
+		"$IPTABLES" -t mangle -D PREROUTING -p udp -m multiport --dports "$TCP_PORTS" -j "$MARK_CHAIN" >/dev/null 2>&1 || break
+	done
+	for lan_cidr in $LAN_CIDRS; do
+		while "$IPTABLES" -t nat -C PREROUTING -s "$lan_cidr" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" >/dev/null 2>&1; do
+			"$IPTABLES" -t nat -D PREROUTING -s "$lan_cidr" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" >/dev/null 2>&1 || break
+		done
+		while "$IPTABLES" -t nat -C PREROUTING -s "$lan_cidr" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" >/dev/null 2>&1; do
+			"$IPTABLES" -t nat -D PREROUTING -s "$lan_cidr" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" >/dev/null 2>&1 || break
+		done
+	done
+	iptables_delete_all nat "$TCP_CHAIN"
+	iptables_delete_all mangle "$MARK_CHAIN"
+	while "$IP" rule del fwmark "$ROUTE_MARK" table "$ROUTE_TABLE" >/dev/null 2>&1; do :; done
+	"$IP" route flush table "$ROUTE_TABLE" >/dev/null 2>&1 || :
+	log "transparent proxy rules removed"
+}
+
+firewall_up() {
+	firewall_down
+	"$IPTABLES" -t nat -N "$TCP_CHAIN" || die "cannot create TCP chain"
+	"$IPTABLES" -t mangle -N "$MARK_CHAIN" || die "cannot create UDP chain"
+	"$IPTABLES" -t nat -A "$TCP_CHAIN" -m mark --mark "$BYPASS_MARK" -j RETURN
+	"$IPTABLES" -t mangle -A "$MARK_CHAIN" -m mark --mark "$BYPASS_MARK" -j RETURN
+	for bypass_cidr in $BYPASS_CIDRS; do
+		"$IPTABLES" -t nat -A "$TCP_CHAIN" -d "$bypass_cidr" -j RETURN
+		"$IPTABLES" -t mangle -A "$MARK_CHAIN" -d "$bypass_cidr" -j RETURN
+	done
+	if command -v ipset >/dev/null 2>&1 && ipset list "$CN_IPSET" >/dev/null 2>&1; then
+		"$IPTABLES" -t nat -A "$TCP_CHAIN" -m set --match-set "$CN_IPSET" dst -j RETURN
+		"$IPTABLES" -t mangle -A "$MARK_CHAIN" -m set --match-set "$CN_IPSET" dst -j RETURN
+	fi
+	for lan_cidr in $LAN_CIDRS; do
+		"$IPTABLES" -t nat -A "$TCP_CHAIN" -s "$lan_cidr" -p tcp -j REDIRECT --to-ports "$REDIR_PORT"
+		"$IPTABLES" -t mangle -A "$MARK_CHAIN" -s "$lan_cidr" -p udp -j MARK --set-mark "$ROUTE_MARK"
+		"$IPTABLES" -t nat -A PREROUTING -s "$lan_cidr" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
+		"$IPTABLES" -t nat -A PREROUTING -s "$lan_cidr" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
+	done
+	"$IPTABLES" -t nat -A PREROUTING -p tcp -m multiport --dports "$TCP_PORTS" -j "$TCP_CHAIN"
+	"$IPTABLES" -t mangle -A PREROUTING -p udp -m multiport --dports "$TCP_PORTS" -j "$MARK_CHAIN"
+	"$IP" rule add fwmark "$ROUTE_MARK" table "$ROUTE_TABLE" || die "cannot add policy rule"
+	"$IP" route add default dev "$TUN_DEVICE" table "$ROUTE_TABLE" || die "cannot add TUN route"
+	log "transparent proxy and LAN DNS rules installed"
+}
+
+wait_for_tun() {
+	wait_count=0
+	while ! "$IP" link show "$TUN_DEVICE" >/dev/null 2>&1; do
+		wait_count=$((wait_count + 1))
+		[ "$wait_count" -lt 30 ] || return 1
+		sleep 1
+	done
+}
+
+cleanup_managed() {
+	trap - INT TERM EXIT
+	[ -n "${core_pid:-}" ] && kill "$core_pid" >/dev/null 2>&1 || :
+	firewall_down
+	rm -f "$PID_FILE"
+}
+
+run_managed() {
+	prepare_core
+	copy_runtime_config
+	validate_config "$RUNTIME_CONFIG" || die "active configuration is invalid"
+	trap cleanup_managed INT TERM EXIT
+	"$CORE" -d "$RUN_DIR" -f "$RUNTIME_CONFIG" >>"$RUN_DIR/mihomo.log" 2>&1 &
+	core_pid=$!
+	echo $$ >"$PID_FILE"
+	wait_for_tun || die "TUN device $TUN_DEVICE did not appear"
+	firewall_up
+	wait "$core_pid"
+	run_status=$?
+	cleanup_managed
+	return "$run_status"
+}
+
+start_background() {
+	if [ -r "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+		die "already running"
+	fi
+	"$0" run </dev/null >/dev/null 2>&1 &
+	start_pid=$!
+	sleep 2
+	kill -0 "$start_pid" 2>/dev/null || die "failed to start; inspect $RUN_DIR/mihomo.log"
+	log "started as pid $start_pid"
+}
+
+stop_background() {
+	if [ -r "$PID_FILE" ]; then
+		stop_pid=$(cat "$PID_FILE")
+		kill "$stop_pid" >/dev/null 2>&1 || :
+		stop_count=0
+		while kill -0 "$stop_pid" 2>/dev/null; do
+			stop_count=$((stop_count + 1))
+			[ "$stop_count" -lt 10 ] || break
+			sleep 1
+		done
+	fi
+	firewall_down
+	rm -f "$PID_FILE"
+}
+
+status_service() {
+	if [ -r "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+		printf '%s\n' "running pid $(cat "$PID_FILE")"
+		return 0
+	fi
+	printf '%s\n' "stopped"
+	return 1
+}
+
+install_service() {
+	ensure_dirs
+	install_target=$DATA_DIR/bin/mihomo-router
+	mkdir -p "$DATA_DIR/bin" || die "cannot create $DATA_DIR/bin"
+	if [ "$0" != "$install_target" ]; then
+		cp "$0" "$install_target" || die "cannot install controller"
+		chmod 755 "$install_target"
+	fi
+	if [ ! -r "$CONFIG_FILE" ] && [ -r "$DATA_DIR/share/mihomo-router.conf.example" ]; then
+		cp "$DATA_DIR/share/mihomo-router.conf.example" "$CONFIG_FILE"
+		chmod 600 "$CONFIG_FILE"
+	fi
+	log "installed; configure $CONFIG_FILE, then run update"
+}
+
+uninstall_service() {
+	stop_background
+	if [ -x /etc/init.d/mihomo-router ]; then
+		/etc/init.d/mihomo-router disable >/dev/null 2>&1 || :
+	fi
+	log "service disabled; persistent data retained in $DATA_DIR"
+}
+
+migrate_shellcrash() {
+	migration_source=${2:-/data/ShellCrash/configs/ShellCrash.cfg}
+	[ -r "$migration_source" ] || die "cannot read $migration_source"
+	[ -r "$CONFIG_FILE" ] || die "cannot read $CONFIG_FILE; install first"
+	migration_url=$(awk '
+		/^Url=/ {
+			value=substr($0, 5)
+			if (value ~ /^'"'"'/ && value ~ /'"'"'$/) value=substr(value, 2, length(value)-2)
+			print value
+			exit
+		}
+	' "$migration_source")
+	[ -n "$migration_url" ] || die "no Url entry in $migration_source"
+	case "$migration_url" in *"'"*) die "subscription URL contains an unsupported quote" ;; esac
+	migration_tmp=$CONFIG_FILE.new
+	awk -v url="$migration_url" '
+		/^SUBSCRIPTION_URL=/ { print "SUBSCRIPTION_URL='"'"'" url "'"'"'"; found=1; next }
+		{ print }
+		END { if (!found) print "SUBSCRIPTION_URL='"'"'" url "'"'"'" }
+	' "$CONFIG_FILE" >"$migration_tmp" || die "cannot prepare migrated configuration"
+	chmod 600 "$migration_tmp" 2>/dev/null || :
+	mv "$migration_tmp" "$CONFIG_FILE" || die "cannot activate migrated configuration"
+	log "subscription migrated from ShellCrash (value hidden)"
+}
+
+usage() {
+	printf '%s\n' "usage: $0 install|migrate-shellcrash [CFG]|update|validate FILE|render INPUT OUTPUT|run|start|stop|restart|status|firewall-up|firewall-down|uninstall"
+}
+
+command_name=${1:-}
+case "$command_name" in
+	install) install_service ;;
+	migrate-shellcrash) [ "$#" -le 2 ] || die "migrate-shellcrash accepts at most one file"; migrate_shellcrash "$@" ;;
+	update) update_config ;;
+	validate) [ "$#" -eq 2 ] || die "validate needs a file"; validate_config "$2" ;;
+	render) [ "$#" -eq 3 ] || die "render needs input and output"; normalize_config "$2" "$3" ;;
+	run) run_managed ;;
+	start) start_background ;;
+	stop) stop_background ;;
+	restart) stop_background; start_background ;;
+	status) status_service ;;
+	firewall-up) firewall_up ;;
+	firewall-down) firewall_down ;;
+	uninstall) uninstall_service ;;
+	*) usage; exit 2 ;;
+esac

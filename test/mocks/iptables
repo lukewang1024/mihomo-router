@@ -1,0 +1,7 @@
+#!/bin/sh
+printf 'iptables %s\n' "$*" >>"$MOCK_LOG"
+case " $* " in
+	*" -C "*) exit 1 ;;
+esac
+exit 0
+

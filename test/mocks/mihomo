@@ -1,0 +1,15 @@
+#!/bin/sh
+case " $* " in
+	*" -t "*)
+		config=
+		while [ "$#" -gt 0 ]; do
+			[ "$1" = "-f" ] && { shift; config=$1; }
+			shift
+		done
+		grep -q '^invalid: true' "$config" 2>/dev/null && exit 1
+		exit 0
+		;;
+esac
+trap 'exit 0' TERM INT
+while :; do sleep 1; done
+
