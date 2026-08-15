@@ -1,0 +1,18 @@
+mixed-port: 1080
+mode: rule
+dns:
+  enable: true
+  listen: 127.0.0.1:5353
+  enhanced-mode: fake-ip
+tun:
+  enable: false
+proxies:
+  - name: direct-test
+    type: direct
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies:
+      - direct-test
+rules:
+  - MATCH,PROXY

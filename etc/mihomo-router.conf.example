@@ -1,0 +1,32 @@
+# Keep this file mode 600 because SUBSCRIPTION_URL normally contains a token.
+DATA_DIR=/data/mihomo-router
+RUN_DIR=/tmp/mihomo-router
+
+# Full Clash subscription. The downloaded YAML is normalized and validated.
+SUBSCRIPTION_URL=
+SUBSCRIPTION_TLS_INSECURE=0
+SUBSCRIPTION_USER_AGENT=clash.meta
+
+# Use one source. CORE_ARCHIVE is preferred when persistent storage permits.
+# Supports a raw executable, .gz, or ShellCrash-style .tar.gz archive.
+CORE_ARCHIVE=/data/mihomo-router/mihomo.tar.gz
+CORE_SOURCE=
+CORE_URL=https://testingcf.jsdelivr.net/gh/juewuy/ShellCrash@update/bin/meta/clash-linux-arm64.tar.gz
+CORE_SHA256=03ac13b61c7c639f4134d8158146b6651e1b98d41fdc0bc901047b39210ef535
+CORE_TLS_INSECURE=1
+
+LAN_CIDRS="192.168.31.0/24 192.168.19.0/24"
+BYPASS_CIDRS="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4"
+CN_IPSET=cn_ip
+
+MIXED_PORT=7890
+REDIR_PORT=7892
+TPROXY_PORT=7893
+DNS_PORT=1053
+# Xiaomi's datacenter service commonly occupies 127.0.0.1:9090.
+CONTROLLER_ADDRESS=127.0.0.1:19090
+TUN_DEVICE=utun
+ROUTE_TABLE=100
+ROUTE_MARK=0x1ed4
+BYPASS_MARK=0x1ed6
+TCP_PORTS="22,80,443,8080,8443"
