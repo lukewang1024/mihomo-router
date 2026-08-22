@@ -21,7 +21,7 @@ usage:
 
 Environment:
   MIHOMO_ROUTER_HOST    SSH host, required unless --host is supplied
-  MIHOMO_ROUTER_SOURCE  shellcrash-lite checkout (default: this repository)
+  MIHOMO_ROUTER_SOURCE  mihomo-router checkout (default: this repository)
 EOF
 }
 
