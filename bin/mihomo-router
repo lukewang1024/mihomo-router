@@ -42,6 +42,9 @@ CORE=$RUN_DIR/mihomo
 RUNTIME_CONFIG=$RUN_DIR/config.yaml
 ACTIVE_CONFIG=$DATA_DIR/config.yaml
 MMDB_FILE=${MMDB_FILE:-$DATA_DIR/share/Country.mmdb}
+MMDB_URL=${MMDB_URL:-}
+MMDB_SHA256=${MMDB_SHA256:-}
+MMDB_TLS_INSECURE=${MMDB_TLS_INSECURE:-0}
 PID_FILE=$RUN_DIR/manager.pid
 TCP_CHAIN=MR_TCP
 MARK_CHAIN=MR_MARK
@@ -61,6 +64,24 @@ ensure_dirs() {
 }
 
 prepare_geodata() {
+	if [ ! -r "$MMDB_FILE" ] && [ -n "$MMDB_URL" ]; then
+		mmdb_tmp=$RUN_DIR/Country.mmdb.download
+		[ "$MMDB_TLS_INSECURE" != 1 ] || [ -n "$MMDB_SHA256" ] || die "MMDB_TLS_INSECURE=1 requires MMDB_SHA256"
+		fetch "$MMDB_URL" "$mmdb_tmp" "$MMDB_TLS_INSECURE" || {
+			rm -f "$mmdb_tmp"
+			die "MMDB download failed"
+		}
+		if [ -n "$MMDB_SHA256" ]; then
+			mmdb_sha=$(sha256_file "$mmdb_tmp") || die "no SHA-256 tool available"
+			[ "$mmdb_sha" = "$MMDB_SHA256" ] || {
+				rm -f "$mmdb_tmp"
+				die "MMDB SHA-256 mismatch"
+			}
+		fi
+		mkdir -p "$(dirname "$MMDB_FILE")" || die "cannot create MMDB directory"
+		mv "$mmdb_tmp" "$MMDB_FILE" || die "cannot activate MMDB"
+		chmod 600 "$MMDB_FILE" 2>/dev/null || :
+	fi
 	[ -r "$MMDB_FILE" ] || return 0
 	[ -e "$RUN_DIR/Country.mmdb" ] || ln -s "$MMDB_FILE" "$RUN_DIR/Country.mmdb" 2>/dev/null || cp "$MMDB_FILE" "$RUN_DIR/Country.mmdb"
 }
