@@ -1,0 +1,185 @@
+#!/bin/sh
+
+set -eu
+
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
+
+SCRIPT_DIR=$(CDPATH='' cd "$(dirname "$0")" && pwd)
+ROUTER_HOST=${MIHOMO_ROUTER_HOST:-}
+SOURCE_DIR=${MIHOMO_ROUTER_SOURCE:-$(CDPATH='' cd "$SCRIPT_DIR/.." && pwd)}
+SUBSCRIPTION_URL=
+
+usage() {
+	cat <<'EOF'
+usage:
+  mihomo-router-deploy bootstrap --host HOST --subscription-url URL
+  mihomo-router-deploy bootstrap --host HOST --subscription-stdin
+  mihomo-router-deploy update --host HOST [--subscription-url URL|--subscription-stdin]
+  mihomo-router-deploy restart --host HOST
+  mihomo-router-deploy status --host HOST
+
+Environment:
+  MIHOMO_ROUTER_HOST    SSH host, required unless --host is supplied
+  MIHOMO_ROUTER_SOURCE  shellcrash-lite checkout (default: this repository)
+EOF
+}
+
+die() {
+	printf '%s\n' "mihomo-router-deploy: ERROR: $*" >&2
+	exit 1
+}
+
+read_subscription_stdin() {
+	IFS= read -r SUBSCRIPTION_URL || :
+	[ -n "$SUBSCRIPTION_URL" ] || die "subscription URL is empty"
+}
+
+set_subscription() {
+	[ -n "$SUBSCRIPTION_URL" ] || return 0
+	case "$SUBSCRIPTION_URL" in
+		*"'"*) die "subscription URL cannot contain a single quote" ;;
+	esac
+	# Send the secret through SSH stdin. It is not part of the remote command
+	# line and is never printed by this wrapper.
+	{
+		printf '%s\n' "$SUBSCRIPTION_URL"
+		cat <<'REMOTE_SCRIPT'
+set -eu
+config=/etc/mihomo-router.conf
+tmp=$config.new
+awk -v url="$url" '
+	/^SUBSCRIPTION_URL=/ { print "SUBSCRIPTION_URL=\047" url "\047"; found=1; next }
+	{ print }
+	END { if (!found) print "SUBSCRIPTION_URL=\047" url "\047" }
+' "$config" >"$tmp"
+chmod 600 "$tmp"
+mv "$tmp" "$config"
+REMOTE_SCRIPT
+	} | ssh "$ROUTER_HOST" 'IFS= read -r url; export url; sh -s'
+}
+
+upload_runtime() {
+	[ -x "$SOURCE_DIR/bin/mihomo-router" ] || die "missing $SOURCE_DIR/bin/mihomo-router"
+	[ -r "$SOURCE_DIR/openwrt/mihomo-router.init" ] || die "missing OpenWrt init script"
+	[ -r "$SOURCE_DIR/etc/mihomo-router.conf.example" ] || die "missing config example"
+
+	scp -O \
+		"$SOURCE_DIR/bin/mihomo-router" \
+		"$SOURCE_DIR/openwrt/mihomo-router.init" \
+		"$SOURCE_DIR/etc/mihomo-router.conf.example" \
+		"$ROUTER_HOST:/tmp/"
+
+	ssh "$ROUTER_HOST" '
+		set -eu
+		mkdir -p /data/mihomo-router/bin /data/mihomo-router/share
+		cp /tmp/mihomo-router /data/mihomo-router/bin/mihomo-router
+		cp /tmp/mihomo-router.init /etc/init.d/mihomo-router
+		cp /tmp/mihomo-router.conf.example /data/mihomo-router/share/mihomo-router.conf.example
+		if [ ! -r /etc/mihomo-router.conf ]; then
+			cp /data/mihomo-router/share/mihomo-router.conf.example /etc/mihomo-router.conf
+		fi
+		chmod 755 /data/mihomo-router/bin/mihomo-router /etc/init.d/mihomo-router
+		chmod 600 /etc/mihomo-router.conf
+		rm -f /tmp/mihomo-router /tmp/mihomo-router.init /tmp/mihomo-router.conf.example /tmp/mihomo-router-deploy
+	'
+}
+
+merge_geodata_defaults() {
+	ssh "$ROUTER_HOST" 'sh -s' <<'REMOTE_SCRIPT'
+set -eu
+config=/etc/mihomo-router.conf
+example=/data/mihomo-router/share/mihomo-router.conf.example
+tmp=$config.new
+awk '
+	BEGIN { keys[1]="MMDB_FILE"; keys[2]="MMDB_URL"; keys[3]="MMDB_SHA256"; keys[4]="MMDB_TLS_INSECURE" }
+	/^([A-Z0-9_]+)=/ { seen[substr($0, 1, index($0, "=") - 1)]=1 }
+	{ print }
+	END {
+		for (i=1; i<=4; i++) if (!seen[keys[i]]) {
+			while ((getline line < example) > 0) if (line ~ ("^" keys[i] "=")) print line
+			close(example)
+		}
+	}
+' "$config" >"$tmp"
+chmod 600 "$tmp"
+mv "$tmp" "$config"
+REMOTE_SCRIPT
+}
+
+bootstrap_router() {
+	[ -n "$SUBSCRIPTION_URL" ] || die "bootstrap requires --subscription-url or --subscription-stdin"
+	upload_runtime
+	merge_geodata_defaults
+	set_subscription
+	ssh "$ROUTER_HOST" '
+		set -eu
+		if [ -x /etc/init.d/shellcrash ]; then
+			/etc/init.d/shellcrash stop >/dev/null 2>&1 || :
+			/etc/init.d/shellcrash disable >/dev/null 2>&1 || :
+		fi
+		if [ -r /etc/crontabs/root ]; then
+			sed -i "/task\\.sh 103/d" /etc/crontabs/root
+		fi
+		/data/mihomo-router/bin/mihomo-router install
+		/data/mihomo-router/bin/mihomo-router update
+		/etc/init.d/mihomo-router enable
+		/etc/init.d/mihomo-router restart
+	'
+	printf '%s\n' "mihomo-router bootstrapped and restarted on $ROUTER_HOST"
+}
+
+update_router() {
+	set_subscription
+	ssh "$ROUTER_HOST" '
+		/data/mihomo-router/bin/mihomo-router update
+		/etc/init.d/mihomo-router restart
+	'
+	printf '%s\n' "mihomo-router updated and restarted on $ROUTER_HOST"
+}
+
+command_name=${1:-}
+[ -n "$command_name" ] || { usage >&2; exit 2; }
+shift
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--subscription-url)
+			[ "$#" -ge 2 ] || { usage >&2; exit 2; }
+			SUBSCRIPTION_URL=$2
+			shift 2
+			;;
+		--subscription-stdin)
+			read_subscription_stdin
+			shift
+			;;
+		--host)
+			[ "$#" -ge 2 ] || { usage >&2; exit 2; }
+			ROUTER_HOST=$2
+			shift 2
+			;;
+		--source)
+			[ "$#" -ge 2 ] || { usage >&2; exit 2; }
+			SOURCE_DIR=$2
+			shift 2
+			;;
+		-h|--help)
+			usage
+			exit 0
+			;;
+		*)
+			usage >&2
+			exit 2
+			;;
+	esac
+done
+
+[ -n "$ROUTER_HOST" ] || die "router host is required; use --host or MIHOMO_ROUTER_HOST"
+
+case "$command_name" in
+	bootstrap) bootstrap_router ;;
+	update) update_router ;;
+	restart) ssh "$ROUTER_HOST" '/etc/init.d/mihomo-router restart' ;;
+	status) ssh "$ROUTER_HOST" '/data/mihomo-router/bin/mihomo-router status' ;;
+	*) usage >&2; exit 2 ;;
+esac

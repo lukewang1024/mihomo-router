@@ -42,6 +42,20 @@ mihomo-router stop
 mihomo-router uninstall
 ```
 
+For a router that already accepts SSH, the bundled bootstrap wrapper installs
+the runtime, downloads and verifies the pinned geodata, disables the legacy
+ShellCrash restart task, and enables mihomo-router:
+
+```sh
+./bin/mihomo-router-deploy bootstrap --host xiaomi-r3600 --subscription-stdin < private-url.txt
+./bin/mihomo-router-deploy status --host xiaomi-r3600
+```
+
+The SSH host is supplied by the caller and is not part of the repository. The
+subscription URL is sent over SSH stdin and is not included in the remote
+command line or wrapper output. The router still stores it in its mode-600
+`/etc/mihomo-router.conf`, which is required at runtime.
+
 The first command is the usual fresh-router setup. It stores the URL in
 `/etc/mihomo-router.conf` with mode `600`, downloads and validates the
 subscription, enables the OpenWrt service, and starts it. It refuses to start

@@ -15,6 +15,13 @@ CORE_URL=https://testingcf.jsdelivr.net/gh/juewuy/ShellCrash@update/bin/meta/cla
 CORE_SHA256=03ac13b61c7c639f4134d8158146b6651e1b98d41fdc0bc901047b39210ef535
 CORE_TLS_INSECURE=1
 
+# Small country database used by GEOIP rules. Keep the checksum pinned when
+# changing the URL; the file is downloaded to /data only when missing.
+MMDB_FILE=/data/mihomo-router/share/Country.mmdb
+MMDB_URL=https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country-lite.mmdb
+MMDB_SHA256=248b91c2c9cf46c9ae75b27ab8bee7b44d3f745b6a1372da75b2120494284f7b
+MMDB_TLS_INSECURE=1
+
 LAN_CIDRS="192.168.31.0/24 192.168.19.0/24"
 BYPASS_CIDRS="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4"
 CN_IPSET=cn_ip
