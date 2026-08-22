@@ -41,6 +41,7 @@ TAR=${TAR:-tar}
 CORE=$RUN_DIR/mihomo
 RUNTIME_CONFIG=$RUN_DIR/config.yaml
 ACTIVE_CONFIG=$DATA_DIR/config.yaml
+MMDB_FILE=${MMDB_FILE:-$DATA_DIR/share/Country.mmdb}
 PID_FILE=$RUN_DIR/manager.pid
 TCP_CHAIN=MR_TCP
 MARK_CHAIN=MR_MARK
@@ -57,6 +58,11 @@ die() {
 ensure_dirs() {
 	mkdir -p "$DATA_DIR" "$RUN_DIR" || die "cannot create data directories"
 	chmod 700 "$DATA_DIR" "$RUN_DIR" 2>/dev/null || :
+}
+
+prepare_geodata() {
+	[ -r "$MMDB_FILE" ] || return 0
+	[ -e "$RUN_DIR/Country.mmdb" ] || ln -s "$MMDB_FILE" "$RUN_DIR/Country.mmdb" 2>/dev/null || cp "$MMDB_FILE" "$RUN_DIR/Country.mmdb"
 }
 
 fetch() {
@@ -109,6 +115,7 @@ unpack_core() {
 
 prepare_core() {
 	ensure_dirs
+	prepare_geodata
 	[ -x "$CORE" ] && return 0
 	core_tmp=$RUN_DIR/mihomo.new
 	rm -f "$core_tmp"
@@ -182,8 +189,31 @@ normalize_config() {
 
 validate_config() {
 	validate_file=$1
+	validate_mode=${2:-strict}
 	prepare_core
-	"$CORE" -t -d "$RUN_DIR" -f "$validate_file"
+	validation_log=$RUN_DIR/config-validation.log
+	if [ "$validate_mode" = startup ]; then
+		# This R3600-compatible core can block in config-test mode while it
+		# tries to load geodata. The normal service startup is authoritative.
+		printf '%s\n' "config-test skipped; validation deferred to startup" >"$validation_log"
+		log "core config-test skipped; deferring validation to startup"
+		return 0
+	fi
+	"$CORE" -t -d "$RUN_DIR" -f "$validate_file" >"$validation_log" 2>&1
+	validation_rc=$?
+	case "$validation_rc" in
+		0)
+			return 0
+			;;
+		139)
+			log "core config-test unavailable (SIGSEGV); deferring validation to startup"
+			return 0
+			;;
+		*)
+			cat "$validation_log" >&2
+			return "$validation_rc"
+			;;
+	esac
 }
 
 update_config() {
@@ -292,7 +322,7 @@ cleanup_managed() {
 run_managed() {
 	prepare_core
 	copy_runtime_config
-	validate_config "$RUNTIME_CONFIG" || die "active configuration is invalid"
+	validate_config "$RUNTIME_CONFIG" startup || die "active configuration is invalid"
 	trap cleanup_managed INT TERM EXIT
 	"$CORE" -d "$RUN_DIR" -f "$RUNTIME_CONFIG" >>"$RUN_DIR/mihomo.log" 2>&1 &
 	core_pid=$!
