@@ -335,7 +335,19 @@ wait_for_tun() {
 
 cleanup_managed() {
 	trap - INT TERM EXIT
-	[ -n "${core_pid:-}" ] && kill "$core_pid" >/dev/null 2>&1 || :
+	if [ -n "${core_pid:-}" ]; then
+		kill "$core_pid" >/dev/null 2>&1 || :
+		cleanup_count=0
+		while kill -0 "$core_pid" >/dev/null 2>&1; do
+			cleanup_count=$((cleanup_count + 1))
+			[ "$cleanup_count" -lt 10 ] || {
+				kill -9 "$core_pid" >/dev/null 2>&1 || :
+				break
+			}
+			sleep 1
+		done
+		wait "$core_pid" >/dev/null 2>&1 || :
+	fi
 	firewall_down
 	rm -f "$PID_FILE"
 }
