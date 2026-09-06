@@ -30,13 +30,16 @@ grep -q -- 'MR_MARK' "$TEST_ROOT/iptables.up"
 grep -q -- '--to-ports 7892' "$TEST_ROOT/iptables.up"
 grep -q -- 'fwmark 0x1ed4.*lookup 100' "$TEST_ROOT/rules.up"
 grep -q -- 'default dev utun' "$TEST_ROOT/routes.up"
-if grep -q -- '--dport 53\|--dports 53' "$TEST_ROOT/iptables.up"; then
-	printf '%s\n' 'FAIL: DNS interception rule detected' >&2
-	exit 1
-fi
+grep -q -- '--dport 53 -j REDIRECT --to-ports 1053' "$TEST_ROOT/iptables.up"
+grep -q -- '-d 198.18.0.0/16 -p tcp -j REDIRECT --to-ports 7892' "$TEST_ROOT/iptables.up"
+grep -q -- '-d 198.18.0.0/16 -p udp -j MARK --set-xmark 0x1ed4/0xffffffff' "$TEST_ROOT/iptables.up"
+
+"$PROJECT_DIR/bin/mihomo-router" firewall-up
+iptables-save >"$TEST_ROOT/iptables.again"
+test "$(grep -c -- '-d 198.18.0.0/16' "$TEST_ROOT/iptables.again")" -eq 2
 
 "$PROJECT_DIR/bin/mihomo-router" firewall-down
-if iptables-save | grep -q -- 'MR_TCP\|MR_MARK'; then
+if iptables-save | grep -q -- 'MR_TCP\|MR_MARK\|198.18.0.0/16\|--to-ports 1053'; then
 	printf '%s\n' 'FAIL: custom chains remain after teardown' >&2
 	exit 1
 fi

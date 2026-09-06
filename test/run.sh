@@ -47,7 +47,7 @@ assert_not_grep() {
 
 output=$TEST_ROOT/rendered.yaml
 "$PROJECT_DIR/bin/mihomo-router" render "$PROJECT_DIR/test/fixtures/subscription.yaml" "$output"
-assert_grep '^    listen: 0.0.0.0:1053$' "$output"
+assert_grep '^  listen: 0.0.0.0:1053$' "$output"
 assert_grep '^  enhanced-mode: fake-ip$' "$output"
 test "$(grep -c '^dns:' "$output")" -eq 1 || fail "subscription DNS block was not preserved exactly once"
 assert_grep '^redir-port: 7892$' "$output"
@@ -87,13 +87,20 @@ assert_grep 'iptables -t nat -A PREROUTING -s 192.168.31.0/24 -p udp --dport 53 
 
 "$PROJECT_DIR/bin/mihomo-router" firewall-up
 "$PROJECT_DIR/bin/mihomo-router" firewall-down
+for cidr in 192.168.31.0/24 192.168.19.0/24; do
+	assert_grep "iptables -t nat -A PREROUTING -s $cidr -d 198.18.0.0/16 -p tcp -j REDIRECT --to-ports 7892$" "$MOCK_LOG"
+	assert_grep "iptables -t mangle -A PREROUTING -s $cidr -d 198.18.0.0/16 -p udp -j MARK --set-mark 0x1ed4$" "$MOCK_LOG"
+	assert_grep "iptables -t nat -C PREROUTING -s $cidr -d 198.18.0.0/16 -p tcp -j REDIRECT --to-ports 7892$" "$MOCK_LOG"
+	assert_grep "iptables -t mangle -C PREROUTING -s $cidr -d 198.18.0.0/16 -p udp -j MARK --set-mark 0x1ed4$" "$MOCK_LOG"
+done
+assert_grep 'iptables -t nat -A PREROUTING -p tcp -m multiport --dports 22,80,443,8080,8443 -j MR_TCP$' "$MOCK_LOG"
 
 MOCK_CURL_SOURCE=$PROJECT_DIR/test/fixtures/subscription.yaml
 MOCK_CURL_FAIL=0
 MOCK_EXPECT_USER_AGENT=clash.meta
 export MOCK_CURL_SOURCE MOCK_CURL_FAIL MOCK_EXPECT_USER_AGENT
 "$PROJECT_DIR/bin/mihomo-router" update
-assert_grep '^    listen: 0.0.0.0:1053$' "$TEST_ROOT/data/config.yaml"
+assert_grep '^  listen: 0.0.0.0:1053$' "$TEST_ROOT/data/config.yaml"
 
 old_sum=$(cksum "$TEST_ROOT/data/config.yaml")
 MOCK_CURL_FAIL=1
@@ -121,6 +128,74 @@ if "$PROJECT_DIR/bin/mihomo-router" status >/dev/null 2>&1; then
 	fail "service still reports running after stop"
 fi
 
+# Exercise the shared domain policy without fetching public rule data.
+printf '%s\n' 'CN_RULES_ENABLED=1' >>"$CONFIG"
+cat >"$TEST_ROOT/domestic.yaml" <<'EOF'
+dns: # subscription DNS
+    enable: true
+    enhanced-mode: fake-ip
+    proxy-server-nameserver:
+      - https://resolver.example/dns-query
+    fake-ip-filter:
+      - '*.lan'
+    nameserver-policy:
+      '+.internal.example': 192.168.0.1
+rule-providers:
+    original:
+      type: file
+      behavior: domain
+      path: original.yaml
+rules:
+    - DOMAIN,original.example,PROXY
+    - MATCH,PROXY
+EOF
+"$PROJECT_DIR/bin/mihomo-router" render "$TEST_ROOT/domestic.yaml" "$output"
+assert_grep '^    listen: 0.0.0.0:1053$' "$output"
+assert_grep "rule-set:mr-direct-local,mr-cn" "$output"
+assert_grep 'https://resolver.example/dns-query' "$output"
+assert_grep "'\*.lan'" "$output"
+assert_grep "'+.internal.example': 192.168.0.1" "$output"
+assert_grep '^    original:' "$output"
+assert_grep 'interval: 86400' "$output"
+assert_grep "path: '$TEST_ROOT/data/rules/cn.mrs'" "$output"
+assert_grep '^    - DOMAIN,original.example,PROXY$' "$output"
+first_rule=$(awk '/^rules:/ { getline; print; exit }' "$output")
+[ "$first_rule" = '    - RULE-SET,mr-direct-local,DIRECT' ] || fail "local DIRECT policy lacks priority"
+awk '
+    /    fake-ip-filter:/ { print "    fake-ip-filter-mode: rule" }
+    /\*\.lan/ { print "      - MATCH,fake-ip"; next }
+    { print }
+' "$TEST_ROOT/domestic.yaml" >"$TEST_ROOT/rule-mode.yaml"
+"$PROJECT_DIR/bin/mihomo-router" render "$TEST_ROOT/rule-mode.yaml" "$output"
+assert_grep 'RULE-SET,mr-cn,real-ip' "$output"
+assert_grep 'MATCH,fake-ip' "$output"
+sed 's/fake-ip-filter-mode: rule/fake-ip-filter-mode: whitelist/' "$TEST_ROOT/rule-mode.yaml" >"$TEST_ROOT/whitelist.yaml"
+if "$PROJECT_DIR/bin/mihomo-router" render "$TEST_ROOT/whitelist.yaml" "$output" 2>/dev/null; then
+	fail "whitelist semantics silently changed"
+fi
+sed 's/fake-ip-filter:/fake-ip-filter: [example.com]/' "$TEST_ROOT/domestic.yaml" >"$TEST_ROOT/inline.yaml"
+if "$PROJECT_DIR/bin/mihomo-router" render "$TEST_ROOT/inline.yaml" "$output" 2>/dev/null; then
+	fail "nonempty inline filter silently lost"
+fi
+"$PROJECT_DIR/bin/mihomo-router" update
+assert_not_grep 'mr-cn' "$TEST_ROOT/data/config.yaml"
+printf '%s\n' 'payload:' '  - +.example.com' >"$TEST_ROOT/data/rules/direct-local.yaml"
+local_sum=$(cksum "$TEST_ROOT/data/rules/direct-local.yaml")
+"$PROJECT_DIR/bin/mihomo-router" start
+assert_grep 'RULE-SET,mr-cn,DIRECT' "$TEST_ROOT/run/config.yaml"
+"$PROJECT_DIR/bin/mihomo-router" stop
+"$PROJECT_DIR/bin/mihomo-router" start
+test "$(grep -c 'mr-cn:' "$TEST_ROOT/run/config.yaml")" -eq 1 || fail "restart duplicated overlay"
+"$PROJECT_DIR/bin/mihomo-router" stop
+[ "$local_sum" = "$(cksum "$TEST_ROOT/data/rules/direct-local.yaml")" ] || fail "local domains overwritten"
+old_sum=$(cksum "$TEST_ROOT/data/config.yaml")
+MOCK_CURL_SOURCE=$TEST_ROOT/whitelist.yaml
+export MOCK_CURL_SOURCE
+if "$PROJECT_DIR/bin/mihomo-router" update >/dev/null 2>&1; then
+	fail "unsupported domestic overlay unexpectedly activated"
+fi
+[ "$old_sum" = "$(cksum "$TEST_ROOT/data/config.yaml")" ] || fail "overlay rejection changed subscription"
+
 rm -f "$TEST_ROOT/run/mihomo"
 printf '%s\n' "CORE_ARCHIVE=$TEST_ROOT/missing.gz" "CORE_URL=https://example.invalid/mihomo.gz" "CORE_TLS_INSECURE=1" "CORE_SHA256=" >>"$CONFIG"
 if "$PROJECT_DIR/bin/mihomo-router" validate "$TEST_ROOT/data/config.yaml" >/dev/null 2>&1; then
@@ -144,3 +219,6 @@ printf 'PASS: failed and invalid updates roll back atomically\n'
 printf 'PASS: managed start/status/stop lifecycle works\n'
 printf 'PASS: insecure core download requires a pinned SHA-256\n'
 printf 'PASS: ShellCrash-style tar.gz core archives are supported\n'
+printf 'PASS: domestic DNS/routing policy preserves subscription settings and local domains\n'
+printf 'PASS: unsupported overlays fail without replacing the active subscription\n'
+printf 'PASS: restarts regenerate the overlay without duplication\n'

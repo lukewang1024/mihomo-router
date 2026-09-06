@@ -63,25 +63,30 @@ upload_runtime() {
 	[ -x "$SOURCE_DIR/bin/mihomo-router" ] || die "missing $SOURCE_DIR/bin/mihomo-router"
 	[ -r "$SOURCE_DIR/openwrt/mihomo-router.init" ] || die "missing OpenWrt init script"
 	[ -r "$SOURCE_DIR/etc/mihomo-router.conf.example" ] || die "missing config example"
+	[ -r "$SOURCE_DIR/share/domestic-overlay.awk" ] || die "missing domestic overlay"
+	ssh "$ROUTER_HOST" 'mkdir -p /tmp/mihomo-router-upload; chmod 700 /tmp/mihomo-router-upload'
 
 	scp -O \
 		"$SOURCE_DIR/bin/mihomo-router" \
+		"$SOURCE_DIR/share/domestic-overlay.awk" \
 		"$SOURCE_DIR/openwrt/mihomo-router.init" \
 		"$SOURCE_DIR/etc/mihomo-router.conf.example" \
-		"$ROUTER_HOST:/tmp/"
+		"$ROUTER_HOST:/tmp/mihomo-router-upload/"
 
 	ssh "$ROUTER_HOST" '
 		set -eu
 		mkdir -p /data/mihomo-router/bin /data/mihomo-router/share
-		cp /tmp/mihomo-router /data/mihomo-router/bin/mihomo-router
-		cp /tmp/mihomo-router.init /etc/init.d/mihomo-router
-		cp /tmp/mihomo-router.conf.example /data/mihomo-router/share/mihomo-router.conf.example
+		cp /tmp/mihomo-router-upload/mihomo-router /data/mihomo-router/bin/mihomo-router
+		cp /tmp/mihomo-router-upload/domestic-overlay.awk /data/mihomo-router/share/domestic-overlay.awk
+		cp /tmp/mihomo-router-upload/mihomo-router.init /etc/init.d/mihomo-router
+		cp /tmp/mihomo-router-upload/mihomo-router.conf.example /data/mihomo-router/share/mihomo-router.conf.example
 		if [ ! -r /etc/mihomo-router.conf ]; then
 			cp /data/mihomo-router/share/mihomo-router.conf.example /etc/mihomo-router.conf
 		fi
 		chmod 755 /data/mihomo-router/bin/mihomo-router /etc/init.d/mihomo-router
 		chmod 600 /etc/mihomo-router.conf
-		rm -f /tmp/mihomo-router /tmp/mihomo-router.init /tmp/mihomo-router.conf.example /tmp/mihomo-router-deploy
+		rm -f /tmp/mihomo-router-upload/mihomo-router /tmp/mihomo-router-upload/domestic-overlay.awk /tmp/mihomo-router-upload/mihomo-router.init /tmp/mihomo-router-upload/mihomo-router.conf.example
+		rmdir /tmp/mihomo-router-upload
 	'
 }
 
