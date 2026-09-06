@@ -37,3 +37,16 @@ ROUTE_TABLE=100
 ROUTE_MARK=0x1ed4
 BYPASS_MARK=0x1ed6
 TCP_PORTS="22,80,443,8080,8443"
+
+# Must match/contain dns.fake-ip-range; these destinations require all ports.
+FAKE_IP_CIDR=198.18.0.0/16
+
+# Optional domestic domain policy. Existing configurations default to off;
+# new installations using this example enable it. Provider updates are managed
+# by Mihomo and keep a persistent cache under DATA_DIR/rules.
+CN_RULES_ENABLED=1
+CN_RULES_URL=https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/cn.mrs
+CN_RULES_INTERVAL=86400
+# Use a subscription proxy/group name if DIRECT cannot reach the rule URL.
+CN_RULES_PROXY=DIRECT
+CN_DNS_SERVERS="https://dns.alidns.com/dns-query https://doh.pub/dns-query"

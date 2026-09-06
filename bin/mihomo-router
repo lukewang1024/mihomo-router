@@ -33,6 +33,8 @@ ROUTE_TABLE=${ROUTE_TABLE:-100}
 ROUTE_MARK=${ROUTE_MARK:-0x1ed4}
 BYPASS_MARK=${BYPASS_MARK:-0x1ed6}
 TCP_PORTS=${TCP_PORTS:-22,80,443,8080,8443}
+# Must cover the DNS fake-ip-range. Synthetic destinations cannot bypass Mihomo.
+FAKE_IP_CIDR=${FAKE_IP_CIDR:-198.18.0.0/16}
 IPTABLES=${IPTABLES:-iptables}
 IP=${IP:-ip}
 CURL=${CURL:-curl}
@@ -41,6 +43,18 @@ TAR=${TAR:-tar}
 CORE=$RUN_DIR/mihomo
 RUNTIME_CONFIG=$RUN_DIR/config.yaml
 ACTIVE_CONFIG=$DATA_DIR/config.yaml
+CN_RULES_ENABLED=${CN_RULES_ENABLED:-0}
+CN_RULES_URL=${CN_RULES_URL:-https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/cn.mrs}
+CN_RULES_INTERVAL=${CN_RULES_INTERVAL:-86400}
+CN_RULES_PROXY=${CN_RULES_PROXY:-DIRECT}
+CN_DNS_SERVERS=${CN_DNS_SERVERS:-"https://dns.alidns.com/dns-query https://doh.pub/dns-query"}
+CN_RULES_CACHE=$DATA_DIR/rules/cn.mrs
+CN_LOCAL_FILE=$DATA_DIR/rules/direct-local.yaml
+SCRIPT_DIR=$(CDPATH='' cd "$(dirname "$0")" && pwd)
+DOMESTIC_OVERLAY=${DOMESTIC_OVERLAY:-$SCRIPT_DIR/../share/domestic-overlay.awk}
+# Mihomo limits provider files to its home unless explicitly permitted.
+SAFE_PATHS="$DATA_DIR${SAFE_PATHS:+:$SAFE_PATHS}"
+export SAFE_PATHS
 MMDB_FILE=${MMDB_FILE:-$DATA_DIR/share/Country.mmdb}
 MMDB_URL=${MMDB_URL:-}
 MMDB_SHA256=${MMDB_SHA256:-}
@@ -173,17 +187,24 @@ prepare_core() {
 	mv "$core_tmp" "$CORE" || die "cannot activate core"
 }
 
-normalize_config() {
+normalize_base_config() {
 	normalize_input=$1
 	normalize_output=$2
 	awk -v mixed="$MIXED_PORT" -v redir="$REDIR_PORT" -v tproxy="$TPROXY_PORT" -v dns_port="$DNS_PORT" -v tun="$TUN_DEVICE" -v controller="$CONTROLLER_ADDRESS" '
-	BEGIN { in_dns=0; seen_mixed=0; seen_redir=0; seen_tproxy=0; seen_tun=0; seen_controller=0 }
-	/^[^[:space:]#]/ { in_dns=0 }
-	/^dns:[[:space:]]*$/ {
+	BEGIN { in_dns=0; dns_listen=0; seen_mixed=0; seen_redir=0; seen_tproxy=0; seen_tun=0; seen_controller=0 }
+	/^[^[:space:]#]/ {
+		if (in_dns && !dns_listen) print "  listen: 0.0.0.0:" dns_port
+		in_dns=0
+	}
+	/^dns:[[:space:]]*(#.*)?$/ {
 		print
-		print "    listen: 0.0.0.0:" dns_port
-		in_dns=1
+		in_dns=1; dns_listen=0
 		next
+	}
+	in_dns && /^[ ]+[^ #]/ && !dns_listen {
+		match($0, /^[ ]*/)
+		print substr($0, 1, RLENGTH) "listen: 0.0.0.0:" dns_port
+		dns_listen=1
 	}
 	in_dns && /^[[:space:]]+listen:/ { next }
 	/^mixed-port:/ { print "mixed-port: " mixed; seen_mixed=1; next }
@@ -200,12 +221,41 @@ normalize_config() {
 	skip_tun { skip_tun=0 }
 	{ print }
 	END {
+		if (in_dns && !dns_listen) print "  listen: 0.0.0.0:" dns_port
 		if (!seen_mixed) print "mixed-port: " mixed
 		if (!seen_redir) print "redir-port: " redir
 		if (!seen_tproxy) print "tproxy-port: " tproxy
 		if (!seen_controller) print "external-controller: \047" controller "\047"
 		if (!seen_tun) print "tun: {enable: true, stack: system, device: " tun ", auto-route: false, auto-detect-interface: false, dns-hijack: []}"
 	}' "$normalize_input" >"$normalize_output"
+}
+
+prepare_domestic_rules() {
+	[ "$CN_RULES_ENABLED" = 1 ] || return 0
+	mkdir -p "$DATA_DIR/rules" || die "cannot create rule cache directory"
+	if [ ! -e "$CN_LOCAL_FILE" ]; then
+		(umask 077; printf '%s\n' '# Local DIRECT domains; domain syntax, e.g. +.example.com' 'payload: []' >"$CN_LOCAL_FILE") || die "cannot create local domain list"
+	fi
+}
+
+normalize_config() {
+	[ "$CN_RULES_ENABLED" = 1 ] || { normalize_base_config "$1" "$2"; return $?; }
+	[ -r "$DOMESTIC_OVERLAY" ] || { log "missing domestic-overlay.awk; reinstall runtime"; return 1; }
+	case "$CN_RULES_INTERVAL" in ''|*[!0-9]*) log "invalid CN_RULES_INTERVAL"; return 1 ;; esac
+	[ "$CN_RULES_INTERVAL" -ge 3600 ] || { log "CN_RULES_INTERVAL must be >= 3600"; return 1; }
+	# These values are quoted YAML scalars, not executable shell/YAML fragments.
+	case "$CN_RULES_URL$CN_RULES_PROXY$CN_DNS_SERVERS$CN_RULES_CACHE$CN_LOCAL_FILE" in
+		*"'"*|*"
+"*|*\\*) log "unsupported quote, backslash or newline in domestic rule settings"; return 1 ;;
+	esac
+	case "$CN_RULES_URL" in https://*) ;; *) log "CN_RULES_URL must use HTTPS"; return 1 ;; esac
+	normalize_base_config "$1" "$2.base" || return 1
+	awk -v url="$CN_RULES_URL" -v interval="$CN_RULES_INTERVAL" -v proxy="$CN_RULES_PROXY" \
+		-v resolvers="$CN_DNS_SERVERS" -v cache="$CN_RULES_CACHE" -v local_file="$CN_LOCAL_FILE" \
+		-f "$DOMESTIC_OVERLAY" "$2.base" >"$2"
+	overlay_rc=$?
+	rm -f "$2.base"
+	return "$overlay_rc"
 }
 
 validate_config() {
@@ -248,23 +298,26 @@ update_config() {
 		rm -f "$download_tmp"
 		die "subscription download failed; active config unchanged"
 	}
-	normalize_config "$download_tmp" "$candidate_tmp" || {
+	normalize_base_config "$download_tmp" "$candidate_tmp" || {
 		rm -f "$download_tmp" "$candidate_tmp"
 		die "cannot normalize subscription"
 	}
 	rm -f "$download_tmp"
-	validate_config "$candidate_tmp" || {
-		rm -f "$candidate_tmp"
+	prepare_domestic_rules
+	if ! normalize_config "$candidate_tmp" "$candidate_tmp.check" || ! validate_config "$candidate_tmp.check"; then
+		rm -f "$candidate_tmp" "$candidate_tmp.check"
 		die "subscription config rejected by Mihomo; active config unchanged"
-	}
+	fi
 	chmod 600 "$candidate_tmp" 2>/dev/null || :
 	mv "$candidate_tmp" "$ACTIVE_CONFIG" || die "cannot activate config"
+	rm -f "$candidate_tmp.check"
 	log "configuration updated"
 }
 
 copy_runtime_config() {
 	[ -r "$ACTIVE_CONFIG" ] || die "missing $ACTIVE_CONFIG; run update first"
-	cp "$ACTIVE_CONFIG" "$RUNTIME_CONFIG.new" || die "cannot stage config"
+	prepare_domestic_rules
+	normalize_config "$ACTIVE_CONFIG" "$RUNTIME_CONFIG.new" || die "cannot stage config"
 	mv "$RUNTIME_CONFIG.new" "$RUNTIME_CONFIG" || die "cannot activate runtime config"
 }
 
@@ -276,6 +329,14 @@ iptables_delete_all() {
 }
 
 firewall_down() {
+	for lan_cidr in $LAN_CIDRS; do
+		while "$IPTABLES" -t nat -C PREROUTING -s "$lan_cidr" -d "$FAKE_IP_CIDR" -p tcp -j REDIRECT --to-ports "$REDIR_PORT" >/dev/null 2>&1; do
+			"$IPTABLES" -t nat -D PREROUTING -s "$lan_cidr" -d "$FAKE_IP_CIDR" -p tcp -j REDIRECT --to-ports "$REDIR_PORT" >/dev/null 2>&1 || break
+		done
+		while "$IPTABLES" -t mangle -C PREROUTING -s "$lan_cidr" -d "$FAKE_IP_CIDR" -p udp -j MARK --set-mark "$ROUTE_MARK" >/dev/null 2>&1; do
+			"$IPTABLES" -t mangle -D PREROUTING -s "$lan_cidr" -d "$FAKE_IP_CIDR" -p udp -j MARK --set-mark "$ROUTE_MARK" >/dev/null 2>&1 || break
+		done
+	done
 	while "$IPTABLES" -t nat -C PREROUTING -p tcp -m multiport --dports "$TCP_PORTS" -j "$TCP_CHAIN" >/dev/null 2>&1; do
 		"$IPTABLES" -t nat -D PREROUTING -p tcp -m multiport --dports "$TCP_PORTS" -j "$TCP_CHAIN" >/dev/null 2>&1 || break
 	done
@@ -316,6 +377,12 @@ firewall_up() {
 		"$IPTABLES" -t mangle -A "$MARK_CHAIN" -s "$lan_cidr" -p udp -j MARK --set-mark "$ROUTE_MARK"
 		"$IPTABLES" -t nat -A PREROUTING -s "$lan_cidr" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
 		"$IPTABLES" -t nat -A PREROUTING -s "$lan_cidr" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
+	done
+	# Fake-IP answers are not publicly routable: capture every TCP/UDP port,
+	# independently of the real-IP port allowlist and domestic-IP bypass set.
+	for lan_cidr in $LAN_CIDRS; do
+		"$IPTABLES" -t nat -A PREROUTING -s "$lan_cidr" -d "$FAKE_IP_CIDR" -p tcp -j REDIRECT --to-ports "$REDIR_PORT"
+		"$IPTABLES" -t mangle -A PREROUTING -s "$lan_cidr" -d "$FAKE_IP_CIDR" -p udp -j MARK --set-mark "$ROUTE_MARK"
 	done
 	"$IPTABLES" -t nat -A PREROUTING -p tcp -m multiport --dports "$TCP_PORTS" -j "$TCP_CHAIN"
 	"$IPTABLES" -t mangle -A PREROUTING -p udp -m multiport --dports "$TCP_PORTS" -j "$MARK_CHAIN"

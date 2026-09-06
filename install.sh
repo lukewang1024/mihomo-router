@@ -44,6 +44,7 @@ install_dir "$DEST_ROOT/etc/init.d"
 install_dir "$DEST_ROOT/data/mihomo-router/bin"
 install_dir "$DEST_ROOT/data/mihomo-router/share"
 
+cp "$SCRIPT_DIR/share/domestic-overlay.awk" "$DEST_ROOT/data/mihomo-router/share/domestic-overlay.awk"
 cp "$SCRIPT_DIR/bin/mihomo-router" "$DEST_ROOT/data/mihomo-router/bin/mihomo-router"
 cp "$SCRIPT_DIR/openwrt/mihomo-router.init" "$DEST_ROOT/etc/init.d/mihomo-router"
 cp "$SCRIPT_DIR/etc/mihomo-router.conf.example" "$DEST_ROOT/data/mihomo-router/share/mihomo-router.conf.example"
