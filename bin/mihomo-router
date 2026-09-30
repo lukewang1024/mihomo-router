@@ -6,6 +6,17 @@ PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
 CONFIG_FILE=${MIHOMO_ROUTER_CONFIG:-/etc/mihomo-router.conf}
+if [ -z "${MIHOMO_ROUTER_CONFIG:-}" ] && [ -r /data/mihomo-router/router.conf ]; then
+	CONFIG_FILE=/data/mihomo-router/router.conf
+fi
+# Resolve the managed alias so atomic writes preserve its persistent target.
+if [ -L "$CONFIG_FILE" ]; then
+	config_target=$(readlink "$CONFIG_FILE")
+	case "$config_target" in
+		/*) CONFIG_FILE=$config_target ;;
+		*) CONFIG_FILE=$(dirname "$CONFIG_FILE")/$config_target ;;
+	esac
+fi
 # The administrator-selected config is intentionally dynamic.
 # shellcheck disable=SC1090
 [ -r "$CONFIG_FILE" ] && . "$CONFIG_FILE"
@@ -60,6 +71,7 @@ MMDB_URL=${MMDB_URL:-}
 MMDB_SHA256=${MMDB_SHA256:-}
 MMDB_TLS_INSECURE=${MMDB_TLS_INSECURE:-0}
 PID_FILE=$RUN_DIR/manager.pid
+READY_FILE=$RUN_DIR/ready
 TCP_CHAIN=MR_TCP
 MARK_CHAIN=MR_MARK
 
@@ -324,31 +336,31 @@ copy_runtime_config() {
 iptables_delete_all() {
 	delete_table=$1
 	delete_chain=$2
-	"$IPTABLES" -t "$delete_table" -F "$delete_chain" >/dev/null 2>&1 || :
-	"$IPTABLES" -t "$delete_table" -X "$delete_chain" >/dev/null 2>&1 || :
+	"$IPTABLES" -w 5 -t "$delete_table" -F "$delete_chain" >/dev/null 2>&1 || :
+	"$IPTABLES" -w 5 -t "$delete_table" -X "$delete_chain" >/dev/null 2>&1 || :
 }
 
 firewall_down() {
 	for lan_cidr in $LAN_CIDRS; do
-		while "$IPTABLES" -t nat -C PREROUTING -s "$lan_cidr" -d "$FAKE_IP_CIDR" -p tcp -j REDIRECT --to-ports "$REDIR_PORT" >/dev/null 2>&1; do
-			"$IPTABLES" -t nat -D PREROUTING -s "$lan_cidr" -d "$FAKE_IP_CIDR" -p tcp -j REDIRECT --to-ports "$REDIR_PORT" >/dev/null 2>&1 || break
+		while "$IPTABLES" -w 5 -t nat -C PREROUTING -s "$lan_cidr" -d "$FAKE_IP_CIDR" -p tcp -j REDIRECT --to-ports "$REDIR_PORT" >/dev/null 2>&1; do
+			"$IPTABLES" -w 5 -t nat -D PREROUTING -s "$lan_cidr" -d "$FAKE_IP_CIDR" -p tcp -j REDIRECT --to-ports "$REDIR_PORT" >/dev/null 2>&1 || break
 		done
-		while "$IPTABLES" -t mangle -C PREROUTING -s "$lan_cidr" -d "$FAKE_IP_CIDR" -p udp -j MARK --set-mark "$ROUTE_MARK" >/dev/null 2>&1; do
-			"$IPTABLES" -t mangle -D PREROUTING -s "$lan_cidr" -d "$FAKE_IP_CIDR" -p udp -j MARK --set-mark "$ROUTE_MARK" >/dev/null 2>&1 || break
+		while "$IPTABLES" -w 5 -t mangle -C PREROUTING -s "$lan_cidr" -d "$FAKE_IP_CIDR" -p udp -j MARK --set-mark "$ROUTE_MARK" >/dev/null 2>&1; do
+			"$IPTABLES" -w 5 -t mangle -D PREROUTING -s "$lan_cidr" -d "$FAKE_IP_CIDR" -p udp -j MARK --set-mark "$ROUTE_MARK" >/dev/null 2>&1 || break
 		done
 	done
-	while "$IPTABLES" -t nat -C PREROUTING -p tcp -m multiport --dports "$TCP_PORTS" -j "$TCP_CHAIN" >/dev/null 2>&1; do
-		"$IPTABLES" -t nat -D PREROUTING -p tcp -m multiport --dports "$TCP_PORTS" -j "$TCP_CHAIN" >/dev/null 2>&1 || break
+	while "$IPTABLES" -w 5 -t nat -C PREROUTING -p tcp -m multiport --dports "$TCP_PORTS" -j "$TCP_CHAIN" >/dev/null 2>&1; do
+		"$IPTABLES" -w 5 -t nat -D PREROUTING -p tcp -m multiport --dports "$TCP_PORTS" -j "$TCP_CHAIN" >/dev/null 2>&1 || break
 	done
-	while "$IPTABLES" -t mangle -C PREROUTING -p udp -m multiport --dports "$TCP_PORTS" -j "$MARK_CHAIN" >/dev/null 2>&1; do
-		"$IPTABLES" -t mangle -D PREROUTING -p udp -m multiport --dports "$TCP_PORTS" -j "$MARK_CHAIN" >/dev/null 2>&1 || break
+	while "$IPTABLES" -w 5 -t mangle -C PREROUTING -p udp -m multiport --dports "$TCP_PORTS" -j "$MARK_CHAIN" >/dev/null 2>&1; do
+		"$IPTABLES" -w 5 -t mangle -D PREROUTING -p udp -m multiport --dports "$TCP_PORTS" -j "$MARK_CHAIN" >/dev/null 2>&1 || break
 	done
 	for lan_cidr in $LAN_CIDRS; do
-		while "$IPTABLES" -t nat -C PREROUTING -s "$lan_cidr" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" >/dev/null 2>&1; do
-			"$IPTABLES" -t nat -D PREROUTING -s "$lan_cidr" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" >/dev/null 2>&1 || break
+		while "$IPTABLES" -w 5 -t nat -C PREROUTING -s "$lan_cidr" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" >/dev/null 2>&1; do
+			"$IPTABLES" -w 5 -t nat -D PREROUTING -s "$lan_cidr" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" >/dev/null 2>&1 || break
 		done
-		while "$IPTABLES" -t nat -C PREROUTING -s "$lan_cidr" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" >/dev/null 2>&1; do
-			"$IPTABLES" -t nat -D PREROUTING -s "$lan_cidr" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" >/dev/null 2>&1 || break
+		while "$IPTABLES" -w 5 -t nat -C PREROUTING -s "$lan_cidr" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" >/dev/null 2>&1; do
+			"$IPTABLES" -w 5 -t nat -D PREROUTING -s "$lan_cidr" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" >/dev/null 2>&1 || break
 		done
 	done
 	iptables_delete_all nat "$TCP_CHAIN"
@@ -360,32 +372,32 @@ firewall_down() {
 
 firewall_up() {
 	firewall_down
-	"$IPTABLES" -t nat -N "$TCP_CHAIN" || die "cannot create TCP chain"
-	"$IPTABLES" -t mangle -N "$MARK_CHAIN" || die "cannot create UDP chain"
-	"$IPTABLES" -t nat -A "$TCP_CHAIN" -m mark --mark "$BYPASS_MARK" -j RETURN
-	"$IPTABLES" -t mangle -A "$MARK_CHAIN" -m mark --mark "$BYPASS_MARK" -j RETURN
+	"$IPTABLES" -w 5 -t nat -N "$TCP_CHAIN" || die "cannot create TCP chain"
+	"$IPTABLES" -w 5 -t mangle -N "$MARK_CHAIN" || die "cannot create UDP chain"
+	"$IPTABLES" -w 5 -t nat -A "$TCP_CHAIN" -m mark --mark "$BYPASS_MARK" -j RETURN || die "cannot install transparent proxy rule"
+	"$IPTABLES" -w 5 -t mangle -A "$MARK_CHAIN" -m mark --mark "$BYPASS_MARK" -j RETURN || die "cannot install transparent proxy rule"
 	for bypass_cidr in $BYPASS_CIDRS; do
-		"$IPTABLES" -t nat -A "$TCP_CHAIN" -d "$bypass_cidr" -j RETURN
-		"$IPTABLES" -t mangle -A "$MARK_CHAIN" -d "$bypass_cidr" -j RETURN
+		"$IPTABLES" -w 5 -t nat -A "$TCP_CHAIN" -d "$bypass_cidr" -j RETURN || die "cannot install transparent proxy rule"
+		"$IPTABLES" -w 5 -t mangle -A "$MARK_CHAIN" -d "$bypass_cidr" -j RETURN || die "cannot install transparent proxy rule"
 	done
 	if command -v ipset >/dev/null 2>&1 && ipset list "$CN_IPSET" >/dev/null 2>&1; then
-		"$IPTABLES" -t nat -A "$TCP_CHAIN" -m set --match-set "$CN_IPSET" dst -j RETURN
-		"$IPTABLES" -t mangle -A "$MARK_CHAIN" -m set --match-set "$CN_IPSET" dst -j RETURN
+		"$IPTABLES" -w 5 -t nat -A "$TCP_CHAIN" -m set --match-set "$CN_IPSET" dst -j RETURN || die "cannot install transparent proxy rule"
+		"$IPTABLES" -w 5 -t mangle -A "$MARK_CHAIN" -m set --match-set "$CN_IPSET" dst -j RETURN || die "cannot install transparent proxy rule"
 	fi
 	for lan_cidr in $LAN_CIDRS; do
-		"$IPTABLES" -t nat -A "$TCP_CHAIN" -s "$lan_cidr" -p tcp -j REDIRECT --to-ports "$REDIR_PORT"
-		"$IPTABLES" -t mangle -A "$MARK_CHAIN" -s "$lan_cidr" -p udp -j MARK --set-mark "$ROUTE_MARK"
-		"$IPTABLES" -t nat -A PREROUTING -s "$lan_cidr" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
-		"$IPTABLES" -t nat -A PREROUTING -s "$lan_cidr" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
+		"$IPTABLES" -w 5 -t nat -A "$TCP_CHAIN" -s "$lan_cidr" -p tcp -j REDIRECT --to-ports "$REDIR_PORT" || die "cannot install transparent proxy rule"
+		"$IPTABLES" -w 5 -t mangle -A "$MARK_CHAIN" -s "$lan_cidr" -p udp -j MARK --set-mark "$ROUTE_MARK" || die "cannot install transparent proxy rule"
+		"$IPTABLES" -w 5 -t nat -A PREROUTING -s "$lan_cidr" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" || die "cannot install transparent proxy rule"
+		"$IPTABLES" -w 5 -t nat -A PREROUTING -s "$lan_cidr" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" || die "cannot install transparent proxy rule"
 	done
 	# Fake-IP answers are not publicly routable: capture every TCP/UDP port,
 	# independently of the real-IP port allowlist and domestic-IP bypass set.
 	for lan_cidr in $LAN_CIDRS; do
-		"$IPTABLES" -t nat -A PREROUTING -s "$lan_cidr" -d "$FAKE_IP_CIDR" -p tcp -j REDIRECT --to-ports "$REDIR_PORT"
-		"$IPTABLES" -t mangle -A PREROUTING -s "$lan_cidr" -d "$FAKE_IP_CIDR" -p udp -j MARK --set-mark "$ROUTE_MARK"
+		"$IPTABLES" -w 5 -t nat -A PREROUTING -s "$lan_cidr" -d "$FAKE_IP_CIDR" -p tcp -j REDIRECT --to-ports "$REDIR_PORT" || die "cannot install transparent proxy rule"
+		"$IPTABLES" -w 5 -t mangle -A PREROUTING -s "$lan_cidr" -d "$FAKE_IP_CIDR" -p udp -j MARK --set-mark "$ROUTE_MARK" || die "cannot install transparent proxy rule"
 	done
-	"$IPTABLES" -t nat -A PREROUTING -p tcp -m multiport --dports "$TCP_PORTS" -j "$TCP_CHAIN"
-	"$IPTABLES" -t mangle -A PREROUTING -p udp -m multiport --dports "$TCP_PORTS" -j "$MARK_CHAIN"
+	"$IPTABLES" -w 5 -t nat -A PREROUTING -p tcp -m multiport --dports "$TCP_PORTS" -j "$TCP_CHAIN" || die "cannot install transparent proxy rule"
+	"$IPTABLES" -w 5 -t mangle -A PREROUTING -p udp -m multiport --dports "$TCP_PORTS" -j "$MARK_CHAIN" || die "cannot install transparent proxy rule"
 	"$IP" rule add fwmark "$ROUTE_MARK" table "$ROUTE_TABLE" || die "cannot add policy rule"
 	"$IP" route add default dev "$TUN_DEVICE" table "$ROUTE_TABLE" || die "cannot add TUN route"
 	log "transparent proxy and LAN DNS rules installed"
@@ -416,10 +428,19 @@ cleanup_managed() {
 		wait "$core_pid" >/dev/null 2>&1 || :
 	fi
 	firewall_down
-	rm -f "$PID_FILE"
+	rm -f "$PID_FILE" "$READY_FILE"
 }
 
 run_managed() {
+	rm -f "$READY_FILE"
+	# Keep selected groups across reboots; never replace an open core database.
+	ensure_dirs
+	if [ ! -L "$RUN_DIR/cache.db" ]; then
+		if [ -r "$RUN_DIR/cache.db" ] && [ ! -e "$DATA_DIR/cache.db" ]; then
+			cp "$RUN_DIR/cache.db" "$DATA_DIR/cache.db" || die "cannot preserve core cache"
+		fi
+		ln -sf "$DATA_DIR/cache.db" "$RUN_DIR/cache.db" || die "cannot link core cache"
+	fi
 	prepare_core
 	copy_runtime_config
 	validate_config "$RUNTIME_CONFIG" startup || die "active configuration is invalid"
@@ -429,6 +450,7 @@ run_managed() {
 	echo $$ >"$PID_FILE"
 	wait_for_tun || die "TUN device $TUN_DEVICE did not appear"
 	firewall_up
+	: >"$READY_FILE"
 	wait "$core_pid"
 	run_status=$?
 	cleanup_managed
@@ -458,7 +480,7 @@ stop_background() {
 		done
 	fi
 	firewall_down
-	rm -f "$PID_FILE"
+	rm -f "$PID_FILE" "$READY_FILE"
 }
 
 status_service() {
@@ -486,6 +508,15 @@ install_service() {
 }
 
 uninstall_service() {
+	# Boot includes must not reactivate a deliberately disabled installation.
+	touch "$DATA_DIR/.disabled"
+	if command -v uci >/dev/null 2>&1; then
+		uci -q delete firewall.mihomo_router || :
+		uci commit firewall || die "cannot remove persistent boot include"
+	fi
+	if [ -x /etc/init.d/mihomo-router ]; then
+		/etc/init.d/mihomo-router stop || die "cannot stop procd service"
+	fi
 	stop_background
 	if [ -x /etc/init.d/mihomo-router ]; then
 		/etc/init.d/mihomo-router disable >/dev/null 2>&1 || :

@@ -33,6 +33,7 @@ overlay, validates it with Mihomo, and atomically activates it.
 - `share/domestic-overlay.awk` — domestic domain DNS and routing overlay.
 - `etc/mihomo-router.conf.example` — router-specific settings.
 - `openwrt/mihomo-router.init` — OpenWrt/procd integration.
+- `bin/mihomo-router-boot` — persistent startup and ShellCrash handover.
 - `test/` — hermetic command mocks and integration tests.
 - `Dockerfile.test` — an Alpine/BusyBox test environment with iptables 1.6.
 
@@ -43,7 +44,7 @@ overlay, validates it with Mihomo, and atomically activates it.
 mihomo-router install
 mihomo-router migrate-shellcrash
 mihomo-router update
-mihomo-router start
+mihomo-router-boot start
 mihomo-router status
 mihomo-router stop
 mihomo-router uninstall
@@ -63,10 +64,22 @@ subscription URL is sent over SSH stdin and is not included in the remote
 command line or wrapper output. The router still stores it in its mode-600
 `/etc/mihomo-router.conf`, which is required at runtime.
 
+To upgrade the installed scripts without refreshing the subscription:
+
+```sh
+./bin/mihomo-router-deploy upgrade --host xiaomi-r6500
+```
+
+`update` refreshes the subscription; `upgrade` uploads the current runtime,
+installer, overlay and boot helpers while preserving router settings.
+
 The first command is the usual fresh-router setup. It stores the URL in
 `/etc/mihomo-router.conf` with mode `600`, downloads and validates the
-subscription, enables the OpenWrt service, and starts it. It refuses to start
-while a ShellCrash init service reports that it is running.
+subscription, enables the OpenWrt service, and starts it. Activation stops and disables an existing ShellCrash init service, writes its
+persistent `.dis_startup` marker (including Xiaomi's `/data/other_vol` layout),
+and removes the known `task.sh 103` and `start_legacy_wd.sh shellcrash` cron
+restart jobs. If stopping fails or `CrashCore` remains alive, activation fails
+instead of allowing both cores to own the same ports and firewall.
 
 For a staged/offline install, omit `--start`. `--root DIR` installs into a test
 or image root instead of the live router.
@@ -79,10 +92,23 @@ from `/data/ShellCrash/configs/ShellCrash.cfg` without printing it.
 Subscriptions are requested with `User-Agent: clash.meta` by default so servers
 that negotiate formats return Clash YAML rather than legacy/base64 content.
 
-`install` creates runtime directories and installs the procd init script.  It
-does not overwrite ShellCrash or alter its boot setting.  Disable ShellCrash
-only when the new service has passed a manual test; both services must never
-own the transparent-proxy rules at the same time.
+The installer stores configuration in `/data/mihomo-router/router.conf` and
+the init script in `/data/mihomo-router/share/mihomo-router.init`. The `/etc`
+paths are symlinks for compatibility. Existing configuration is migrated
+without replacing router settings or credentials. Edit the persistent config
+path when using an editor that saves by replacing files.
+
+Use `mihomo-router-boot start` (or `restart`) to activate the installation.
+It registers a persistent UCI firewall include that reconstructs `/etc` and
+starts procd after `/data` is available. This handles Xiaomi firmware where
+`/etc` is RAM-backed and ordinary `init.d enable` links disappear on reboot.
+Firewall reloads restore transparent rules and wait for TUN initialization.
+The selected proxy groups are retained in `/data/mihomo-router/cache.db`.
+`mihomo-router uninstall` removes the boot include, stops procd and leaves
+data in place; an explicit boot-helper start can reactivate it.
+
+A staged/offline install only writes files. ShellCrash handover happens on
+activation; its scripts and subscriptions are retained.
 
 ## Domestic domains: real DNS answers and DIRECT routing
 
