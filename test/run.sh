@@ -70,8 +70,8 @@ printf "%s\n" "Url='https://subscription.invalid/client?key=fixture'" >"$migrati
 MIHOMO_ROUTER_CONFIG=$install_root/etc/mihomo-router.conf "$install_root/data/mihomo-router/bin/mihomo-router" migrate-shellcrash "$migration_source" >/dev/null
 assert_grep "^SUBSCRIPTION_URL='https://subscription.invalid/client?key=fixture'$" "$install_root/etc/mihomo-router.conf"
 case "$(uname -s)" in
-	Darwin) migration_mode=$(stat -f '%Lp' "$install_root/etc/mihomo-router.conf") ;;
-	*) migration_mode=$(stat -c '%a' "$install_root/etc/mihomo-router.conf") ;;
+	Darwin) migration_mode=$(stat -L -f '%Lp' "$install_root/etc/mihomo-router.conf") ;;
+	*) migration_mode=$(stat -L -c '%a' "$install_root/etc/mihomo-router.conf") ;;
 esac
 test "$migration_mode" = 600 || fail "migrated config permissions are not 600"
 
@@ -123,7 +123,9 @@ MOCK_CURL_SOURCE=$PROJECT_DIR/test/fixtures/subscription.yaml
 export MOCK_CURL_SOURCE
 "$PROJECT_DIR/bin/mihomo-router" start
 "$PROJECT_DIR/bin/mihomo-router" status >/dev/null
+[ -f "$TEST_ROOT/run/ready" ] || fail "service reported running before firewall was ready"
 "$PROJECT_DIR/bin/mihomo-router" stop
+[ ! -e "$TEST_ROOT/run/ready" ] || fail "stopped service retained readiness marker"
 if "$PROJECT_DIR/bin/mihomo-router" status >/dev/null 2>&1; then
 	fail "service still reports running after stop"
 fi
@@ -212,6 +214,7 @@ printf 'PASS: installer targets writable OpenWrt partitions\n'
 printf 'PASS: installer accepts and protects a subscription URL argument\n'
 printf 'PASS: ShellCrash subscription migration keeps the token off the command line\n'
 printf 'PASS: firewall provides TCP/UDP transparency with managed LAN DNS interception\n'
+printf 'PASS: firewall writers wait for the xtables lock\n'
 printf 'PASS: firewall operations are repeatable\n'
 printf 'PASS: subscription updates are normalized and validated\n'
 printf 'PASS: subscription requests identify as a Clash Meta client\n'

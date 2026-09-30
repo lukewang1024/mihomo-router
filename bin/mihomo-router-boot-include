@@ -1,0 +1,4 @@
+#!/bin/sh
+# Firewall startup must not wait for core extraction or TUN creation.
+mkdir -p /tmp/mihomo-router
+/data/mihomo-router/bin/mihomo-router-boot firewall >>/tmp/mihomo-router/boot.log 2>&1 </dev/null &

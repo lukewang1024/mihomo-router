@@ -1,0 +1,133 @@
+#!/bin/sh
+
+set -eu
+PATH=${PATH:-/usr/sbin:/usr/bin:/sbin:/bin}
+export PATH
+# A staging root is used only for offline installation and hermetic tests.
+ROOT=${MIHOMO_ROUTER_ROOT:-}
+MR=$ROOT/data/mihomo-router
+
+setup() {
+	mkdir -p "$ROOT/etc/init.d" "$MR"
+	if [ -r "$ROOT/etc/mihomo-router.conf" ] && [ ! -L "$ROOT/etc/mihomo-router.conf" ]; then
+		cp "$ROOT/etc/mihomo-router.conf" "$MR/router.conf.new"
+		chmod 600 "$MR/router.conf.new"
+		mv "$MR/router.conf.new" "$MR/router.conf"
+	elif [ ! -r "$MR/router.conf" ]; then
+		cp "$MR/share/mihomo-router.conf.example" "$MR/router.conf"
+	fi
+	chmod 600 "$MR/router.conf"
+	ln -sf ../data/mihomo-router/router.conf "$ROOT/etc/mihomo-router.conf"
+	ln -sf ../../data/mihomo-router/share/mihomo-router.init "$ROOT/etc/init.d/mihomo-router"
+	# Retire the one-off recovery hook used before this helper was packaged.
+	if [ -r "$ROOT/data/auto_start.sh" ] && grep -q '^/bin/sh /data/mihomo-router/bin/boot-include$' "$ROOT/data/auto_start.sh"; then
+		sed '\|^/bin/sh /data/mihomo-router/bin/boot-include$|d' "$ROOT/data/auto_start.sh" >"$ROOT/data/auto_start.sh.new"
+		chmod 755 "$ROOT/data/auto_start.sh.new"
+		mv "$ROOT/data/auto_start.sh.new" "$ROOT/data/auto_start.sh"
+	fi
+}
+
+disable_shellcrash() {
+	# Both layouts are used by Xiaomi's persistent ShellCrash boot loader.
+	for dir in "$ROOT/data/ShellCrash" "$ROOT/data/other_vol/ShellCrash"; do
+		if [ -d "$dir" ]; then
+			touch "$dir/.dis_startup"
+		fi
+	done
+	# Honor a custom persistent installation path without sourcing its script.
+	if [ -r "$ROOT/data/shellcrash_init.sh" ]; then
+		legacy_dir=$(sed -n 's/^CRASHDIR=//p' "$ROOT/data/shellcrash_init.sh" | head -n 1 | tr -d "\"'")
+		case "$legacy_dir" in
+			/data/*) [ ! -d "$ROOT$legacy_dir" ] || touch "$ROOT$legacy_dir/.dis_startup" ;;
+		esac
+	fi
+	if [ -x "$ROOT/etc/init.d/shellcrash" ]; then
+		"$ROOT/etc/init.d/shellcrash" disable
+		if "$ROOT/etc/init.d/shellcrash" status >/dev/null 2>&1 || { [ -z "$ROOT" ] && pidof CrashCore >/dev/null 2>&1; }; then
+			"$ROOT/etc/init.d/shellcrash" stop
+		fi
+	fi
+	if [ -r "$ROOT/etc/crontabs/root" ] && grep -q -e 'task\.sh 103' -e 'start_legacy_wd\.sh shellcrash' "$ROOT/etc/crontabs/root"; then
+		# Preserve unrelated cron jobs; remove the known legacy restart tasks.
+		sed '/task\.sh 103/d; /start_legacy_wd\.sh shellcrash/d' "$ROOT/etc/crontabs/root" >"$ROOT/etc/crontabs/root.new"
+		mv "$ROOT/etc/crontabs/root.new" "$ROOT/etc/crontabs/root"
+	fi
+	[ -z "$ROOT" ] || return 0
+	if pidof CrashCore >/dev/null 2>&1; then
+		for dir in /data/ShellCrash /data/other_vol/ShellCrash "${legacy_dir:-}"; do
+			[ -n "$dir" ] || continue
+			[ ! -x "$dir/start.sh" ] || "$dir/start.sh" stop
+		done
+	fi
+	n=0
+	while pidof CrashCore >/dev/null 2>&1; do
+		n=$((n + 1))
+		[ "$n" -lt 20 ] || { echo 'ShellCrash is still running; refusing to start Mihomo.' >&2; return 1; }
+		sleep 1
+	done
+}
+
+register_boot() {
+	/etc/init.d/mihomo-router enable
+	# Xiaomi rebuilds /etc from firmware at boot. Its firewall configuration
+	# persists, so this include reconstructs the service after /data is mounted.
+	if command -v uci >/dev/null 2>&1; then
+		uci set firewall.mihomo_router=include
+		uci set firewall.mihomo_router.type=script
+		uci set firewall.mihomo_router.path=/data/mihomo-router/bin/mihomo-router-boot-include
+		uci set firewall.mihomo_router.enabled=1
+		uci set firewall.mihomo_router.reload=1
+		uci commit firewall
+	fi
+}
+
+start_service() {
+	[ -z "$ROOT" ] || { echo 'Cannot start a staged installation.' >&2; exit 1; }
+	mkdir -p /tmp/mihomo-router
+	mkdir /tmp/mihomo-router-boot.lock 2>/dev/null || exit 0
+	trap 'rmdir /tmp/mihomo-router-boot.lock' EXIT
+	trap 'exit 1' INT TERM
+	if [ "$ACTION" = firewall ] && [ -e "$MR/.disabled" ]; then
+		exit 0
+	fi
+	rm -f "$MR/.disabled"
+	disable_shellcrash
+	setup
+	register_boot
+	if [ "$ACTION" = restart ]; then
+		/etc/init.d/mihomo-router stop
+		n=0
+		while "$MR/bin/mihomo-router" status >/dev/null 2>&1; do
+			n=$((n + 1))
+			[ "$n" -lt 20 ] || { echo 'Mihomo did not stop.' >&2; exit 1; }
+			sleep 1
+		done
+	fi
+	MIHOMO_ROUTER_CONFIG=$MR/router.conf
+	export MIHOMO_ROUTER_CONFIG
+	# shellcheck disable=SC1090
+	. "$MIHOMO_ROUTER_CONFIG"
+	started=0
+	if ! "$MR/bin/mihomo-router" status >/dev/null 2>&1; then
+		/etc/init.d/mihomo-router start
+		started=1
+	fi
+	# A firewall reload can arrive while procd is still bringing up TUN.
+	n=0
+	while [ ! -f "${RUN_DIR:-/tmp/mihomo-router}/ready" ] || ! "$MR/bin/mihomo-router" status >/dev/null 2>&1 || ! ip link show "${TUN_DEVICE:-utun}" >/dev/null 2>&1; do
+		n=$((n + 1))
+		[ "$n" -lt 30 ] || { echo 'Mihomo did not become ready; inspect /tmp/mihomo-router/boot.log.' >&2; exit 1; }
+		sleep 1
+	done
+	if [ "$started" = 0 ]; then
+		"$MR/bin/mihomo-router" firewall-up
+	fi
+}
+
+ACTION=${1:-start}
+case "$ACTION" in
+	setup) setup ;;
+	disable-shellcrash) disable_shellcrash ;;
+	start|restart|firewall) start_service ;;
+	*) echo "usage: $0 setup|disable-shellcrash|start|restart|firewall" >&2; exit 2 ;;
+esac
