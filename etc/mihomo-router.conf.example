@@ -50,3 +50,11 @@ CN_RULES_INTERVAL=86400
 # Use a subscription proxy/group name if DIRECT cannot reach the rule URL.
 CN_RULES_PROXY=DIRECT
 CN_DNS_SERVERS="https://dns.alidns.com/dns-query https://doh.pub/dns-query"
+
+# Optional ad/tracker filtering; works independently of CN_RULES_ENABLED.
+# Exceptions: DATA_DIR/rules/ads-allow.yaml (domain rules, e.g. +.example.com).
+AD_RULES_ENABLED=0
+AD_RULES_URL=https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/category-ads-all.mrs
+AD_RULES_INTERVAL=86400
+# Use an existing subscription proxy/group when DIRECT cannot reach GitHub.
+AD_RULES_PROXY=DIRECT

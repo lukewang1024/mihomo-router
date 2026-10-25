@@ -9,6 +9,22 @@ function child_indent(i, stop, fallback, j) {
     return fallback
 }
 function provider_fields(n) {
+    if(ad_enabled==1) {
+        print pad(n) "mr-ads:"
+        print pad(n+2) "type: http"
+        print pad(n+2) "behavior: domain"
+        print pad(n+2) "format: mrs"
+        print pad(n+2) "url: \047" ad_url "\047"
+        print pad(n+2) "path: \047" ad_cache "\047"
+        print pad(n+2) "interval: " ad_interval
+        print pad(n+2) "proxy: \047" ad_proxy "\047"
+        print pad(n) "mr-ads-allow:"
+        print pad(n+2) "type: file"
+        print pad(n+2) "behavior: domain"
+        print pad(n+2) "format: yaml"
+        print pad(n+2) "path: \047" ad_allow_file "\047"
+    }
+    if(cn_enabled!=1) return
     print pad(n) "mr-cn:"
     print pad(n+2) "type: http"
     print pad(n+2) "behavior: domain"
@@ -25,14 +41,32 @@ function provider_fields(n) {
 }
 function filters(n, mode) {
     if(mode=="rule") {
-        print pad(n) "- RULE-SET,mr-direct-local,real-ip"
-        print pad(n) "- RULE-SET,mr-cn,real-ip"
+        if(ad_enabled==1) {
+            print pad(n) "- RULE-SET,mr-ads-allow,real-ip"
+            print pad(n) "- RULE-SET,mr-ads,real-ip"
+        }
+        if(cn_enabled==1) {
+            print pad(n) "- RULE-SET,mr-direct-local,real-ip"
+            print pad(n) "- RULE-SET,mr-cn,real-ip"
+        }
     } else {
-        print pad(n) "- \047rule-set:mr-direct-local\047"
-        print pad(n) "- \047rule-set:mr-cn\047"
+        if(ad_enabled==1) {
+            print pad(n) "- \047rule-set:mr-ads-allow\047"
+            print pad(n) "- \047rule-set:mr-ads\047"
+        }
+        if(cn_enabled==1) {
+            print pad(n) "- \047rule-set:mr-direct-local\047"
+            print pad(n) "- \047rule-set:mr-cn\047"
+        }
     }
 }
 function policy(n) {
+    if(ad_enabled==1) {
+        print pad(n) "\047rule-set:mr-ads-allow\047:"
+        for(d=1;d<=dns_count;d++) print pad(n+2) "- \047" dns[d] "\047"
+        print pad(n) "\047rule-set:mr-ads\047: rcode://success"
+    }
+    if(cn_enabled!=1) return
     print pad(n) "\047rule-set:mr-direct-local,mr-cn\047:"
     for(d=1;d<=dns_count;d++) print pad(n+2) "- \047" dns[d] "\047"
 }
@@ -71,7 +105,7 @@ END {
     # Inspect before writing, so malformed subscription sections never silently
     # turn into a different routing policy.
     for(i=1;i<=NR;i++) {
-        if(line[i] ~ /^[ ]*[\047\042]?mr-(cn|direct-local)[\047\042]?:/) fail("reserved provider name already exists")
+        if(line[i] ~ /^[ ]*[\047\042]?mr-(cn|direct-local|ads|ads-allow)[\047\042]?:/) fail("reserved provider name already exists")
         if(line[i] ~ /^(dns|rules|rule-providers):/ && line[i] !~ /^(dns|rules|rule-providers):[ ]*(#.*)?$/) fail("dns/rules/rule-providers must use block YAML")
     }
     for(i=1;i<=NR;i++) {
@@ -82,8 +116,14 @@ END {
             print line[i]
             n=child_indent(i,stop,2)
             if(line[i] ~ /^rules:/) {
-                print pad(n) "- RULE-SET,mr-direct-local,DIRECT"
-                print pad(n) "- RULE-SET,mr-cn,DIRECT"
+                if(ad_enabled==1) {
+                    print pad(n) "- RULE-SET,mr-ads-allow,DIRECT"
+                    print pad(n) "- RULE-SET,mr-ads,REJECT"
+                }
+                if(cn_enabled==1) {
+                    print pad(n) "- RULE-SET,mr-direct-local,DIRECT"
+                    print pad(n) "- RULE-SET,mr-cn,DIRECT"
+                }
                 seen_rules=1
             } else { provider_fields(n); seen_providers=1 }
         } else print line[i]

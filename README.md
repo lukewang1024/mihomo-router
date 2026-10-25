@@ -237,3 +237,50 @@ make docker-test
 VM and additionally applies the real rules inside an isolated network
 namespace. `make docker-test` exercises the mock suite inside an Alpine
 3.8/iptables 1.6 container. Neither path modifies the macOS host firewall.
+
+## Ad and tracker filtering
+
+Set these in the private `/data/mihomo-router/router.conf`:
+
+```sh
+AD_RULES_ENABLED=1
+AD_RULES_INTERVAL=86400
+AD_RULES_PROXY=DIRECT
+```
+
+If GitHub is unreachable directly, set `AD_RULES_PROXY` to an existing subscription
+proxy/group name. Do not put router-specific group names or subscription secrets
+in the shared scripts. The default source is MetaCubeX's `category-ads-all.mrs`;
+`AD_RULES_URL` accepts another HTTPS domain MRS provider. Mihomo refreshes it and
+keeps `/data/mihomo-router/rules/ads.mrs` across restarts. Enable this only with a
+core supporting domain MRS providers and `rcode://success` DNS responses.
+
+The policy works with or without `CN_RULES_ENABLED`. Managed routing order is
+ad exceptions, ad rejection, then domestic DIRECT rules and subscription rules.
+Ad domains receive empty successful DNS replies and real-IP filtering excludes
+them from fake-IP allocation. Exceptions in `rules/ads-allow.yaml` take priority
+in both DNS and routing; use domain payloads such as `+.example.com`. Exceptions
+use the configured `CN_DNS_SERVERS` and DIRECT routing, even in ad-only mode.
+They do not override unrelated subscription DNS policies with more specific matches.
+
+After changing settings or exceptions, run `mihomo-router-boot restart`.
+Setting `AD_RULES_ENABLED=0` disables this managed layer; subscription-provided
+ad rules remain in effect. Subscription updates preserve settings and exceptions.
+An upgrade must install both the manager and `share/domestic-overlay.awk`.
+Cached/in-app ads and traffic bypassing the managed IPv4 firewall may remain;
+this feature does not add IPv6 interception or encrypted-DNS blocking.
+
+## Management API and dashboards
+
+The default management API listens on `127.0.0.1:19090` on the router. Port 9090
+is commonly occupied by Xiaomi's datacenter service. This project does not
+currently install or mount a web dashboard; old ShellCrash UI files do not imply
+that Mihomo serves them. The API can be accessed through an SSH tunnel:
+
+```sh
+ssh -N -L 19090:127.0.0.1:19090 YOUR_ROUTER_SSH_HOST
+```
+
+A compatible dashboard can then connect to `http://127.0.0.1:19090` on the SSH
+client device. Keep the API on loopback unless authentication and access rules
+have been configured deliberately.

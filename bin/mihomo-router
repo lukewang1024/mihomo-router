@@ -61,6 +61,12 @@ CN_RULES_PROXY=${CN_RULES_PROXY:-DIRECT}
 CN_DNS_SERVERS=${CN_DNS_SERVERS:-"https://dns.alidns.com/dns-query https://doh.pub/dns-query"}
 CN_RULES_CACHE=$DATA_DIR/rules/cn.mrs
 CN_LOCAL_FILE=$DATA_DIR/rules/direct-local.yaml
+AD_RULES_ENABLED=${AD_RULES_ENABLED:-0}
+AD_RULES_URL=${AD_RULES_URL:-https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/category-ads-all.mrs}
+AD_RULES_INTERVAL=${AD_RULES_INTERVAL:-86400}
+AD_RULES_PROXY=${AD_RULES_PROXY:-DIRECT}
+AD_RULES_CACHE=$DATA_DIR/rules/ads.mrs
+AD_ALLOW_FILE=$DATA_DIR/rules/ads-allow.yaml
 SCRIPT_DIR=$(CDPATH='' cd "$(dirname "$0")" && pwd)
 DOMESTIC_OVERLAY=${DOMESTIC_OVERLAY:-$SCRIPT_DIR/../share/domestic-overlay.awk}
 # Mihomo limits provider files to its home unless explicitly permitted.
@@ -243,27 +249,37 @@ normalize_base_config() {
 }
 
 prepare_domestic_rules() {
-	[ "$CN_RULES_ENABLED" = 1 ] || return 0
+	[ "$CN_RULES_ENABLED" = 1 ] || [ "$AD_RULES_ENABLED" = 1 ] || return 0
 	mkdir -p "$DATA_DIR/rules" || die "cannot create rule cache directory"
-	if [ ! -e "$CN_LOCAL_FILE" ]; then
+	if [ "$CN_RULES_ENABLED" = 1 ] && [ ! -e "$CN_LOCAL_FILE" ]; then
 		(umask 077; printf '%s\n' '# Local DIRECT domains; domain syntax, e.g. +.example.com' 'payload: []' >"$CN_LOCAL_FILE") || die "cannot create local domain list"
+	fi
+	if [ "$AD_RULES_ENABLED" = 1 ] && [ ! -e "$AD_ALLOW_FILE" ]; then
+		(umask 077; printf '%s\n' '# Ad filtering exceptions, e.g. +.example.com' 'payload: []' >"$AD_ALLOW_FILE") || die "cannot create ad allowlist"
 	fi
 }
 
 normalize_config() {
-	[ "$CN_RULES_ENABLED" = 1 ] || { normalize_base_config "$1" "$2"; return $?; }
+	case "$CN_RULES_ENABLED:$AD_RULES_ENABLED" in [01]:[01]) ;; *) log "rule enable flags must be 0 or 1"; return 1 ;; esac
+	[ "$CN_RULES_ENABLED" = 1 ] || [ "$AD_RULES_ENABLED" = 1 ] || { normalize_base_config "$1" "$2"; return $?; }
 	[ -r "$DOMESTIC_OVERLAY" ] || { log "missing domestic-overlay.awk; reinstall runtime"; return 1; }
+	case "$AD_RULES_INTERVAL" in ''|*[!0-9]*) log "invalid AD_RULES_INTERVAL"; return 1 ;; esac
+	[ "$AD_RULES_INTERVAL" -ge 3600 ] || { log "AD_RULES_INTERVAL must be >= 3600"; return 1; }
 	case "$CN_RULES_INTERVAL" in ''|*[!0-9]*) log "invalid CN_RULES_INTERVAL"; return 1 ;; esac
 	[ "$CN_RULES_INTERVAL" -ge 3600 ] || { log "CN_RULES_INTERVAL must be >= 3600"; return 1; }
 	# These values are quoted YAML scalars, not executable shell/YAML fragments.
-	case "$CN_RULES_URL$CN_RULES_PROXY$CN_DNS_SERVERS$CN_RULES_CACHE$CN_LOCAL_FILE" in
+	case "$CN_RULES_URL$CN_RULES_PROXY$CN_DNS_SERVERS$CN_RULES_CACHE$CN_LOCAL_FILE$AD_RULES_URL$AD_RULES_PROXY$AD_RULES_CACHE$AD_ALLOW_FILE" in
 		*"'"*|*"
 "*|*\\*) log "unsupported quote, backslash or newline in domestic rule settings"; return 1 ;;
 	esac
 	case "$CN_RULES_URL" in https://*) ;; *) log "CN_RULES_URL must use HTTPS"; return 1 ;; esac
+	case "$AD_RULES_URL" in https://*) ;; *) log "AD_RULES_URL must use HTTPS"; return 1 ;; esac
 	normalize_base_config "$1" "$2.base" || return 1
 	awk -v url="$CN_RULES_URL" -v interval="$CN_RULES_INTERVAL" -v proxy="$CN_RULES_PROXY" \
 		-v resolvers="$CN_DNS_SERVERS" -v cache="$CN_RULES_CACHE" -v local_file="$CN_LOCAL_FILE" \
+		-v cn_enabled="$CN_RULES_ENABLED" -v ad_enabled="$AD_RULES_ENABLED" \
+		-v ad_url="$AD_RULES_URL" -v ad_interval="$AD_RULES_INTERVAL" -v ad_proxy="$AD_RULES_PROXY" \
+		-v ad_cache="$AD_RULES_CACHE" -v ad_allow_file="$AD_ALLOW_FILE" \
 		-f "$DOMESTIC_OVERLAY" "$2.base" >"$2"
 	overlay_rc=$?
 	rm -f "$2.base"

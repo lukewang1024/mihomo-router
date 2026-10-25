@@ -198,6 +198,40 @@ if "$PROJECT_DIR/bin/mihomo-router" update >/dev/null 2>&1; then
 fi
 [ "$old_sum" = "$(cksum "$TEST_ROOT/data/config.yaml")" ] || fail "overlay rejection changed subscription"
 
+# Ad filtering must precede domestic bypasses and survive restarts/updates.
+MOCK_CURL_SOURCE=$PROJECT_DIR/test/fixtures/subscription.yaml
+export MOCK_CURL_SOURCE
+printf '%s\n' 'AD_RULES_ENABLED=1' 'AD_RULES_PROXY=PROXY' >>"$CONFIG"
+"$PROJECT_DIR/bin/mihomo-router" render "$TEST_ROOT/domestic.yaml" "$output"
+first_rule=$(awk '/^rules:/ { getline; print; exit }' "$output")
+[ "$first_rule" = '    - RULE-SET,mr-ads-allow,DIRECT' ] || fail "ad exceptions lack priority"
+awk '/^rules:/ { getline; getline; if ($0 != "    - RULE-SET,mr-ads,REJECT") exit 1 }' "$output" || fail "ad rejection lacks priority"
+assert_grep "'rule-set:mr-ads': rcode://success" "$output"
+assert_grep "path: '$TEST_ROOT/data/rules/ads.mrs'" "$output"
+assert_grep "proxy: 'PROXY'" "$output"
+"$PROJECT_DIR/bin/mihomo-router" render "$TEST_ROOT/rule-mode.yaml" "$output"
+assert_grep 'RULE-SET,mr-ads,real-ip' "$output"
+assert_grep 'MATCH,fake-ip' "$output"
+"$PROJECT_DIR/bin/mihomo-router" update
+assert_not_grep 'mr-ads' "$TEST_ROOT/data/config.yaml"
+printf '%s\n' 'payload:' '  - +.allowed.example' >"$TEST_ROOT/data/rules/ads-allow.yaml"
+allow_sum=$(cksum "$TEST_ROOT/data/rules/ads-allow.yaml")
+"$PROJECT_DIR/bin/mihomo-router" start
+assert_grep 'RULE-SET,mr-ads,REJECT' "$TEST_ROOT/run/config.yaml"
+"$PROJECT_DIR/bin/mihomo-router" stop
+[ "$allow_sum" = "$(cksum "$TEST_ROOT/data/rules/ads-allow.yaml")" ] || fail "ad allowlist overwritten"
+printf '%s\n' 'CN_RULES_ENABLED=0' >>"$CONFIG"
+"$PROJECT_DIR/bin/mihomo-router" render "$TEST_ROOT/domestic.yaml" "$output"
+assert_grep 'mr-ads:' "$output"
+assert_not_grep 'mr-cn' "$output"
+assert_not_grep 'mr-direct-local' "$output"
+printf '%s\n' 'AD_RULES_INTERVAL=1' >>"$CONFIG"
+if "$PROJECT_DIR/bin/mihomo-router" render "$TEST_ROOT/domestic.yaml" "$output" 2>/dev/null; then
+    fail "invalid ad update interval accepted"
+fi
+printf '%s\n' 'AD_RULES_INTERVAL=86400' >>"$CONFIG"
+printf 'PASS: ad filtering prioritizes exceptions and rejection, supports ad-only mode, and preserves persistent allowlists\n'
+
 rm -f "$TEST_ROOT/run/mihomo"
 printf '%s\n' "CORE_ARCHIVE=$TEST_ROOT/missing.gz" "CORE_URL=https://example.invalid/mihomo.gz" "CORE_TLS_INSECURE=1" "CORE_SHA256=" >>"$CONFIG"
 if "$PROJECT_DIR/bin/mihomo-router" validate "$TEST_ROOT/data/config.yaml" >/dev/null 2>&1; then
