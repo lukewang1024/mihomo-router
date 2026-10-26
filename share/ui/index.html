@@ -23,9 +23,15 @@
     button { font: inherit; border: 0; border-radius: 9px; padding: 10px 17px; background: var(--accent); color: #fff; cursor: pointer; min-height: 44px; }
     button.secondary { color: var(--accent); background: transparent; border: 1px solid var(--line); }
     button:disabled { cursor: default; opacity: .6; }
-    button:focus-visible, input:focus-visible { outline: 3px solid #7eafff; outline-offset: 3px; }
+    button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #7eafff; outline-offset: 3px; }
     label { display: block; margin: 12px 0 6px; }
     input { font: inherit; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: inherit; padding: 10px; width: 100%; max-width: 480px; }
+    select { font: inherit; width: 100%; padding: 10px; margin: 8px 0; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: inherit; }
+    h3 { margin: 0 0 8px; font-size: 17px; }
+    .chain { overflow-wrap: anywhere; }
+    .table-wrap { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; font-size: 14px; }
+    th, td { padding: 10px 8px; border-bottom: 1px solid var(--line); text-align: left; overflow-wrap: anywhere; min-width: 110px; }
     form button { margin: 12px 0 0 8px; }
     .badge { display: inline-block; background: #e9f0ff; color: #165ed1; border-radius: 6px; padding: 2px 9px; font-size: 14px; margin-bottom: 12px; }
     .routes { padding-left: 22px; margin: 8px 0; overflow-wrap: anywhere; }
@@ -39,10 +45,16 @@
 </head>
 <body>
 <main>
-  <header><div><h1>网络出口</h1><span class="muted">选择设备，让指定网络通过它连接。</span></div><button id="refresh" class="secondary" type="button">刷新</button></header>
+  <header><div><h1>网络出口</h1><span class="muted">查看订阅节点、内网出口和当前连接。</span></div><button id="refresh" class="secondary" type="button">刷新</button></header>
   <p id="notice" class="notice" role="status" aria-live="polite">正在连接管理服务…</p>
+  <section id="subscription" class="panel" hidden>
+    <h2>订阅节点</h2>
+    <p id="subscription-summary" class="chain"></p>
+    <p class="muted">手动分组可切换；自动分组显示当前结果。切换对新连接生效。</p>
+    <div id="subscription-groups" class="devices"></div>
+  </section>
   <section id="gateway" class="panel" hidden>
-    <h2>出口设备</h2>
+    <h2>内网出口设备</h2>
     <p class="muted">切换对新连接生效。已有会话需要重新连接。</p>
     <div id="devices" class="devices"></div>
   </section>
@@ -50,6 +62,15 @@
     <h2>通过出口的网络</h2>
     <ul id="routes" class="routes"></ul>
     <small>列表来自当前运行的规则。设备是否能访问目标网络，需要实际连接确认。</small>
+  </section>
+  <section id="traffic" class="panel" hidden>
+    <h2>当前活动连接</h2>
+    <p id="traffic-summary" class="muted"></p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>来源设备</th><th>访问目标</th><th>匹配规则</th><th>实际出口链</th></tr></thead>
+      <tbody id="traffic-rows"></tbody>
+    </table></div>
+    <small>点击刷新查看当前连接。短连接可能已结束；分组选择不代表所有网站都走同一个节点。</small>
   </section>
   <details id="connection" class="panel">
     <summary>管理连接</summary>
@@ -68,12 +89,14 @@
   const group = 'SSH-Gateway';
   const storageKey = 'mihomo-router-access';
   const $ = id => document.getElementById(id);
+  const panels = ['subscription', 'gateway', 'routing', 'traffic'];
   const params = new URLSearchParams(location.hash.slice(1));
   let token = params.get('secret') || '';
   try { token ||= localStorage.getItem(storageKey) || ''; } catch {}
   if (params.has('secret')) history.replaceState(null, '', location.pathname + location.search);
   $('secret').value = token;
   let busy = false;
+  let generation = 0;
   function notice(message, error = false) {
     $('notice').textContent = message;
     $('notice').className = error ? 'notice error' : 'notice';
@@ -85,68 +108,153 @@
     }});
     if (!response.ok) {
       if (response.status === 401) throw new Error('访问口令不正确，请在“管理连接”中重新输入。');
-      if (response.status === 404) throw new Error('出口配置尚未加载，请确认路由器已启用网络出口。');
-      throw new Error('管理请求失败（' + response.status + '），请刷新确认当前出口。');
+      if (response.status === 404) throw new Error('配置或分组不存在，请刷新确认当前配置。');
+      throw new Error('管理请求失败（' + response.status + '），请刷新确认当前状态。');
     }
     return response.status === 204 ? null : response.json();
   }
+  function node(tag, text, className) {
+    const item = document.createElement(tag);
+    if (text !== undefined) item.textContent = text;
+    if (className) item.className = className;
+    return item;
+  }
+  function selectedChain(name, proxies) {
+    const seen = new Set();
+    const chain = [];
+    while (name) {
+      if (seen.has(name)) { chain.push('循环引用'); break; }
+      seen.add(name); chain.push(name);
+      const state = proxies[name];
+      if (state?.type === 'LoadBalance') { chain.push('按连接分配节点'); break; }
+      name = state?.now;
+    }
+    return chain.join(' → ') || '未选择';
+  }
+  function delayLabel(state) {
+    const last = (state?.history || []).slice(-1)[0];
+    if (!last) return '暂无测速记录';
+    return last.delay > 0 ? '最近测速：' + last.delay + ' ms' : '最近测速失败';
+  }
+  function disableControls() {
+    for (const id of ['devices', 'subscription-groups']) {
+      for (const item of $(id).querySelectorAll('button, select')) item.disabled = true;
+    }
+    $('refresh').disabled = true;
+  }
+  function renderSubscription(proxies, rules, mode) {
+    const modeLabel = { rule: '规则模式', global: '全局模式', direct: '直连模式' }[mode] || mode || '未知模式';
+    const fallback = rules.filter(rule => rule.type?.toLowerCase() === 'match').slice(-1)[0];
+    const root = mode === 'global' ? 'GLOBAL' : mode === 'direct' ? 'DIRECT' : fallback?.proxy;
+    $('subscription-summary').textContent = modeLabel + (root ? ' · ' + (mode === 'rule' ? '默认规则出口：' : '当前出口：') + selectedChain(root, proxies) : ' · 按匹配规则决定出口');
+    $('subscription-groups').replaceChildren();
+    for (const [name, state] of Object.entries(proxies)) {
+      if (name === group || (name === 'GLOBAL' && mode !== 'global') || !Array.isArray(state.all)) continue;
+      const card = node('div', undefined, 'device');
+      card.append(node('h3', name));
+      const manual = state.type === 'Selector';
+      const typeLabel = { Selector: '手动选择', URLTest: '自动测速', Fallback: '故障转移', LoadBalance: '负载均衡', Relay: '串联' }[state.type] || '自动分组';
+      card.append(node('span', typeLabel, 'badge'), node('p', selectedChain(name, proxies), 'chain'));
+      if (state.type !== 'LoadBalance') card.append(node('small', delayLabel(proxies[state.now])));
+      if (manual) {
+        const choices = document.createElement('select');
+        choices.setAttribute('aria-label', name + '的节点');
+        for (const target of state.all) {
+          const option = node('option', target);
+          option.value = target; option.selected = target === state.now;
+          choices.append(option);
+        }
+        choices.value = state.now || state.all[0] || '';
+        choices.disabled = busy || !state.all.length;
+        const button = node('button', '切换节点'); button.type = 'button';
+        button.disabled = busy || !state.all.length;
+        button.addEventListener('click', () => select(name, choices.value));
+        card.append(choices, button);
+      }
+      $('subscription-groups').append(card);
+    }
+    if (!$('subscription-groups').children.length) $('subscription-groups').textContent = '当前没有订阅分组。';
+    $('subscription').hidden = false;
+  }
   function renderDevices(state) {
     $('devices').replaceChildren();
+    if (!state) { $('gateway').hidden = true; return; }
     for (const name of state.all || []) {
-      const card = document.createElement('div');
       const selected = name === state.now;
-      card.className = selected ? 'device selected' : 'device';
-      const title = document.createElement('strong'); title.textContent = name;
-      const badge = document.createElement('div'); badge.className = 'badge';
-      badge.textContent = selected ? '当前出口' : '可选择';
-      const button = document.createElement('button'); button.type = 'button';
-      button.textContent = selected ? '已选择' : '切换到此设备'; button.disabled = selected || busy;
-      button.addEventListener('click', () => select(name));
+      const card = node('div', undefined, selected ? 'device selected' : 'device');
+      const title = node('strong', name);
+      const badge = node('div', selected ? '当前出口' : '可选择', 'badge');
+      const button = node('button', selected ? '已选择' : '切换到此设备'); button.type = 'button';
+      button.disabled = selected || busy;
+      button.addEventListener('click', () => select(group, name));
       card.append(title, badge, document.createElement('br'), button);
       $('devices').append(card);
     }
     if (!(state.all || []).length) $('devices').textContent = '还没有登记出口设备。';
     $('gateway').hidden = false;
   }
+  function renderTraffic(data) {
+    const entries = data.connections || [];
+    $('traffic-summary').textContent = entries.length + ' 个活动连接' + (entries.length > 50 ? '，显示前 50 个' : '');
+    $('traffic-rows').replaceChildren();
+    for (const entry of entries.slice(0, 50)) {
+      const meta = entry.metadata || {};
+      const row = document.createElement('tr');
+      const target = meta.host || meta.destinationIP || '未知目标';
+      const values = [meta.sourceIP || '路由器', target + (meta.destinationPort ? ':' + meta.destinationPort : ''),
+        (entry.rule || '未知') + (entry.rulePayload ? ' · ' + entry.rulePayload : ''), (entry.chains || []).join(' / ') || '未知'];
+      for (const value of values) row.append(node('td', value));
+      $('traffic-rows').append(row);
+    }
+    $('traffic').hidden = false;
+  }
   async function refresh() {
+    const current = ++generation;
     try {
-      const [state, data] = await Promise.all([api('/proxies/' + group), api('/rules')]);
-      renderDevices(state);
+      const [data, routes, config, traffic] = await Promise.all([api('/proxies'), api('/rules'), api('/configs'), api('/connections')]);
+      if (current !== generation) return;
+      const proxies = data.proxies || {};
+      renderSubscription(proxies, routes.rules || [], config.mode);
+      renderDevices(proxies[group]);
       $('routes').replaceChildren();
-      for (const rule of data.rules || []) {
+      for (const rule of routes.rules || []) {
         if (rule.proxy !== group) continue;
-        const item = document.createElement('li'); item.textContent = rule.payload || rule.type;
-        $('routes').append(item);
+        $('routes').append(node('li', rule.payload || rule.type));
       }
       if (!$('routes').children.length) $('routes').textContent = '当前没有匹配此出口的规则。';
-      $('routing').hidden = false;
+      $('routing').hidden = !proxies[group];
+      renderTraffic(traffic);
       $('connection').open = false;
       try { if (token) localStorage.setItem(storageKey, token); } catch {}
-      notice('已连接管理服务 · 当前出口：' + (state.now || '未选择'));
+      notice('已连接管理服务 · ' + (proxies[group] ? '内网出口：' + (proxies[group].now || '未选择') : '订阅配置已加载'));
+      if (busy) disableControls();
     } catch (error) {
+      if (current !== generation) return;
       notice(error.message || '无法连接管理服务，请稍后刷新。', true);
-      $('gateway').hidden = true; $('routing').hidden = true;
+      for (const id of panels) $(id).hidden = true;
       $('connection').open = true;
     }
   }
-  async function select(name) {
-    if (busy) return;
+  async function select(name, target) {
+    if (busy || !target) return;
     busy = true;
-    for (const button of $('devices').querySelectorAll('button')) button.disabled = true;
-    notice('正在切换出口…');
+    disableControls();
+    notice('正在切换：' + name + '…');
     let failure;
-    try { await api('/proxies/' + group, { method: 'PUT', body: JSON.stringify({ name }) }); }
+    try { await api('/proxies/' + encodeURIComponent(name), { method: 'PUT', body: JSON.stringify({ name: target }) }); }
     catch (error) { failure = error; }
     busy = false;
     await refresh();
+    $('refresh').disabled = false;
     if (failure) notice(failure.message, true);
   }
   $('connect').addEventListener('submit', event => { event.preventDefault(); token = $('secret').value.trim(); refresh(); });
   $('refresh').addEventListener('click', refresh);
   $('forget').addEventListener('click', () => {
+    ++generation;
     token = ''; $('secret').value = '';
     try { localStorage.removeItem(storageKey); } catch {}
-    $('gateway').hidden = true; $('routing').hidden = true;
+    for (const id of panels) $(id).hidden = true;
     notice('已清除浏览器中的访问口令。'); $('connection').open = true;
   });
   refresh();

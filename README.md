@@ -495,6 +495,16 @@ from the running core and clearly distinguishes selection from endpoint health.
 Changing the inventory still requires editing the private provider file and
 reloading the core; it does not expose SSH credentials in the browser.
 
+The same page lists subscription proxy groups. Manual selectors support node
+changes; automatic/fallback/load-balancing groups show their current state.
+The summary displays runtime mode and follows nested selections for the default
+rule or global group. In rule mode, that default is not the route for every
+website: the active connections table shows each connection's target, source,
+matched rule and actual outbound chain. Refresh to update the snapshot; short
+connections may already have ended. Recent delay values are historical samples,
+not a guarantee that a node is currently reachable. Subscription controls work
+without enabling the optional SSH gateway.
+
 `make dashboard-test` uses Node's standard library to exercise authentication,
 rule display, device switching and failure handling without a browser/server.
 
