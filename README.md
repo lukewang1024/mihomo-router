@@ -352,6 +352,19 @@ With no domain routes, DNS is left unchanged. The overlay preserves existing
 Fake-IP filters; if a target domain gets real private IPs, include their actual
 prefixes in `SSH_GATEWAY_CIDRS` so those connections are captured as well.
 
+List every required domain suffix in `SSH_GATEWAY_DOMAINS`, even when its real
+addresses belong to a configured private prefix. CIDR rules use `no-resolve`:
+a Fake-IP/domain connection can otherwise match an earlier domestic rule before
+its private address is resolved. Validate the actual website from a LAN client,
+not only an SSH connection to a numeric address.
+
+Check the selected resolver through the gateway endpoint itself. A VPN may
+return DNS SERVFAIL for plain TCP port 53 even when HTTPS works. In that case,
+use a reachable DNS-over-HTTPS resolver, for example
+`SSH_GATEWAY_DNS=https://dns.alidns.com/dns-query`, if it answers the required
+names correctly. Public DNS is suitable only for names published there; private
+DNS zones still require the endpoint's reachable internal resolver.
+
 Validate before activation, then restart once to load the inventory/group/rules:
 
 ```sh
