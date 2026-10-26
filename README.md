@@ -453,3 +453,33 @@ rule display, device switching and failure handling without a browser/server.
 On RAM-backed routers, `MIHOMO_LOG_LEVEL=warning` can override a subscription's
 per-connection info logging. Empty keeps the subscription setting; accepted values
 are debug/info/warning/error/silent. Existing logs are not discarded automatically.
+
+### Main Wi-Fi with a direct guest network
+
+Keep only the main network's IPv4 subnet in `LAN_CIDRS`. For example,
+`LAN_CIDRS="192.168.0.0/24"` captures the main LAN, while an independent guest
+network on `192.168.33.0/24` falls through the managed TCP/UDP and gateway
+chains without redirection or marking. The setting applies to wired clients
+on that main LAN as well as its Wi-Fi clients.
+
+Keep guest DNS independent: its DHCP/DNS service must use ordinary upstream
+resolvers, not forward to Mihomo's DNS listener. Main clients' port-53 queries
+are redirected by source subnet; guest clients must receive real DNS answers
+rather than the main network's fake IPs. Retain the vendor guest firewall's
+WAN forwarding and LAN isolation. A guest network does not need access to the
+management controller.
+
+On Xiaomi stock firmware, inspect the installed guest-network helper and
+wireless driver before making changes. Some builds provide
+`/usr/sbin/guestwifi.sh`, which creates both bands, the guest bridge, DHCP, and
+vendor firewall rules. Its presence and behavior are firmware-specific; do not
+copy a standard OpenWrt wireless configuration over the vendor configuration.
+Back up wireless, network, DHCP, and firewall configuration and check their
+persistent copies after enabling it. Do not include Wi-Fi passwords in command
+logs or tracked configuration.
+
+This controller currently captures IPv4 only. If the main LAN acquires routed
+IPv6, it can bypass the IPv4 proxy policy; configure IPv6 handling separately
+before treating that policy as complete. A network with link-local IPv6 only
+does not have that routed path. Verify both SSIDs with real clients after
+configuration, and verify persistence after a planned router reboot.
