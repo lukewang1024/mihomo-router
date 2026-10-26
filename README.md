@@ -38,6 +38,41 @@ optional SSH gateway selector reads a separate, private local device inventory.
 - `test/` — hermetic command mocks and integration tests.
 - `Dockerfile.test` — an Alpine/BusyBox test environment with iptables 1.6.
 
+## Portable setup and private settings
+
+The installer ships mechanisms, not organization-specific routing policy. Keep
+subscription URLs, real target suffixes/prefixes, endpoint addresses/users,
+controller tokens, and SSH keys in the router's private files:
+
+| File | Purpose |
+| --- | --- |
+| `/data/mihomo-router/router.conf` | Managed LANs, target routes, DNS, UI and token |
+| `/data/mihomo-router/gateways/proxies.yaml` | Endpoint inventory and pinned host keys |
+| `/data/mihomo-router/ssh/` | Dedicated endpoint access keys |
+
+Existing files survive runtime upgrades. Repository ignore rules also exclude
+these common private paths if temporarily used inside a checkout; they do not
+protect arbitrary filenames or replace checking a staged diff before committing.
+
+For a new router, bootstrap the runtime, then configure its actual main subnet
+in `LAN_CIDRS`. Set up the optional gateway inventory with `gateway init`; fill
+its endpoint, pin its verified host key, and explicitly configure the private
+target suffixes/prefixes and a tested DNS resolver. Run `gateway check` before
+restarting. Enable the dashboard only on the trusted LAN, with a private
+controller token. Examples below are placeholders, not a policy to copy blindly.
+
+Guest Wi-Fi is firmware-specific and is not created automatically by the
+installer. Use the vendor's supported guest setup, keep its subnet out of
+`LAN_CIDRS`, and verify independent DNS and direct internet access. The main
+network's wired clients share its policy. Review routed IPv6 separately.
+
+Acceptance needs a separate LAN client: test an actual target hostname over
+HTTPS and a numeric private target, then test ordinary internet access from the
+guest Wi-Fi. A successful parser check or a numeric SSH test alone does not
+prove domain routing and DNS work. Verify reboot behavior during a planned
+maintenance window. DNS or endpoint changes should remain machine-local; they
+do not require adding an organization preset to the installer.
+
 ## Commands
 
 ```sh

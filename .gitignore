@@ -1,3 +1,13 @@
 .DS_Store
 *.log
 
+# Machine-local runtime settings, subscriptions, inventory and credentials.
+/router.conf
+/router.conf.*
+/config.yaml
+/config.yaml.*
+/gateways/
+/ssh/
+/backups/
+/cache.db
+/private-url.txt

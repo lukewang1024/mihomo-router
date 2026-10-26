@@ -22,7 +22,9 @@ MMDB_URL=https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/coun
 MMDB_SHA256=248b91c2c9cf46c9ae75b27ab8bee7b44d3f745b6a1372da75b2120494284f7b
 MMDB_TLS_INSECURE=1
 
-LAN_CIDRS="192.168.31.0/24 192.168.19.0/24"
+# Managed source subnets only (wired and wireless clients on these LANs).
+# Replace with the actual main LAN; omit an independent direct guest subnet.
+LAN_CIDRS="192.168.31.0/24"
 BYPASS_CIDRS="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4"
 CN_IPSET=cn_ip
 
@@ -72,6 +74,9 @@ SSH_GATEWAY_ENABLED=0
 SSH_GATEWAY_CIDRS=""
 # Domain suffixes without wildcard; requires TCP/TLS/HTTPS DNS through the group.
 SSH_GATEWAY_DOMAINS=""
+# Set explicitly after testing from the selected endpoint. HTTPS can work
+# where plain TCP DNS fails, e.g. https://dns.alidns.com/dns-query.
+# Private-only DNS zones require their own reachable internal resolver.
 SSH_GATEWAY_DNS=
 # Optional controller secret override, shared by runtime config and switch command.
 SSH_GATEWAY_API_SECRET=
