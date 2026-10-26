@@ -8,6 +8,8 @@ proxies:
     port: 8022
     username: replace-with-termux-username
     private-key: /data/mihomo-router/ssh/gateway_ed25519
+    host-key-algorithms:
+      - ssh-ed25519
     host-key:
       - 'ssh-ed25519 REPLACE_WITH_VERIFIED_HOST_PUBLIC_KEY'
   - name: laptop-b
@@ -16,5 +18,7 @@ proxies:
     port: 22
     username: replace-with-ssh-username
     private-key: /data/mihomo-router/ssh/gateway_ed25519
+    host-key-algorithms:
+      - ssh-ed25519
     host-key:
       - 'ssh-ed25519 REPLACE_WITH_VERIFIED_HOST_PUBLIC_KEY'

@@ -32,6 +32,12 @@ TPROXY_PORT=7893
 DNS_PORT=1053
 # Xiaomi's datacenter service commonly occupies 127.0.0.1:9090.
 CONTROLLER_ADDRESS=127.0.0.1:19090
+# Optional built-in gateway dashboard: /data/mihomo-router/share/ui
+DASHBOARD_DIR=
+# Private controller token; keep configured even if SSH gateway is disabled.
+CONTROLLER_SECRET=
+# Optional override; warning reduces per-connection logs on RAM-backed routers.
+MIHOMO_LOG_LEVEL=
 TUN_DEVICE=utun
 ROUTE_TABLE=100
 ROUTE_MARK=0x1ed4

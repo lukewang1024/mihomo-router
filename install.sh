@@ -52,6 +52,8 @@ fi
 install_dir "$DEST_ROOT/etc/init.d"
 install_dir "$DEST_ROOT/data/mihomo-router/bin"
 install_dir "$DEST_ROOT/data/mihomo-router/share"
+install_dir "$DEST_ROOT/data/mihomo-router/share/ui"
+cp "$SCRIPT_DIR/share/ui/index.html" "$DEST_ROOT/data/mihomo-router/share/ui/index.html"
 
 cp "$SCRIPT_DIR/share/ssh-gateway.sh" "$SCRIPT_DIR/share/ssh-gateway-overlay.awk" "$DEST_ROOT/data/mihomo-router/share/"
 cp "$SCRIPT_DIR/etc/ssh-gateways.yaml.example" "$DEST_ROOT/data/mihomo-router/share/"

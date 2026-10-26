@@ -39,6 +39,9 @@ REDIR_PORT=${REDIR_PORT:-7892}
 TPROXY_PORT=${TPROXY_PORT:-7893}
 DNS_PORT=${DNS_PORT:-1053}
 CONTROLLER_ADDRESS=${CONTROLLER_ADDRESS:-127.0.0.1:19090}
+DASHBOARD_DIR=${DASHBOARD_DIR:-}
+MIHOMO_LOG_LEVEL=${MIHOMO_LOG_LEVEL:-}
+CONTROLLER_SECRET=${CONTROLLER_SECRET:-${SSH_GATEWAY_API_SECRET:-}}
 TUN_DEVICE=${TUN_DEVICE:-utun}
 ROUTE_TABLE=${ROUTE_TABLE:-100}
 ROUTE_MARK=${ROUTE_MARK:-0x1ed4}
@@ -212,7 +215,15 @@ prepare_core() {
 normalize_base_config() {
 	normalize_input=$1
 	normalize_output=$2
-	awk -v mixed="$MIXED_PORT" -v redir="$REDIR_PORT" -v tproxy="$TPROXY_PORT" -v dns_port="$DNS_PORT" -v tun="$TUN_DEVICE" -v controller="$CONTROLLER_ADDRESS" '
+    if [ -n "$DASHBOARD_DIR" ]; then
+        case "$DASHBOARD_DIR" in /*) ;; *) log "DASHBOARD_DIR must be absolute"; return 1 ;; esac
+        case "$DASHBOARD_DIR" in *"'"*|*\\*|*'
+'*) log "unsupported dashboard path"; return 1 ;; esac
+    fi
+    case "$MIHOMO_LOG_LEVEL" in ''|debug|info|warning|error|silent) ;; *) log "invalid MIHOMO_LOG_LEVEL"; return 1 ;; esac
+    case "$CONTROLLER_SECRET" in *"'"*|*'"'*|*\\*|*'
+'*|*"$(printf '\r')"*) log "unsupported controller secret"; return 1 ;; esac
+	awk -v mixed="$MIXED_PORT" -v redir="$REDIR_PORT" -v tproxy="$TPROXY_PORT" -v dns_port="$DNS_PORT" -v tun="$TUN_DEVICE" -v controller="$CONTROLLER_ADDRESS" -v ui="$DASHBOARD_DIR" -v api_secret="$CONTROLLER_SECRET" -v log_level="$MIHOMO_LOG_LEVEL" '
 	BEGIN { in_dns=0; dns_listen=0; seen_mixed=0; seen_redir=0; seen_tproxy=0; seen_tun=0; seen_controller=0 }
 	/^[^[:space:]#]/ {
 		if (in_dns && !dns_listen) print "  listen: 0.0.0.0:" dns_port
@@ -232,6 +243,10 @@ normalize_base_config() {
 	/^mixed-port:/ { print "mixed-port: " mixed; seen_mixed=1; next }
 	/^redir-port:/ { print "redir-port: " redir; seen_redir=1; next }
 	/^tproxy-port:/ { print "tproxy-port: " tproxy; seen_tproxy=1; next }
+    /^log-level:/ && log_level!="" { print "log-level: " log_level; seen_log_level=1; next }
+    /^secret:/ && api_secret!="" { print "secret: \047" api_secret "\047"; seen_secret=1; next }
+    /^external-ui:/ && ui!="" { print "external-ui: \047" ui "\047"; seen_ui=1; next }
+    /^external-ui-(url|name):/ && ui!="" { next }
 	/^external-controller:/ { print "external-controller: \047" controller "\047"; seen_controller=1; next }
 	/^tun:/ {
 		print "tun: {enable: true, stack: system, device: " tun ", auto-route: false, auto-detect-interface: false, dns-hijack: []}"
@@ -244,6 +259,9 @@ normalize_base_config() {
 	{ print }
 	END {
 		if (in_dns && !dns_listen) print "  listen: 0.0.0.0:" dns_port
+		if (log_level!="" && !seen_log_level) print "log-level: " log_level
+		if (api_secret!="" && !seen_secret) print "secret: \047" api_secret "\047"
+		if (ui!="" && !seen_ui) print "external-ui: \047" ui "\047"
 		if (!seen_mixed) print "mixed-port: " mixed
 		if (!seen_redir) print "redir-port: " redir
 		if (!seen_tproxy) print "tproxy-port: " tproxy

@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>网络出口</title>
+  <style>
+    :root { font: 16px/1.6 system-ui, sans-serif; color: #182332; background: #f3f5f7; --card: #fff; --line: #dce2e8; --muted: #607080; --accent: #165ed1; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { max-width: 900px; margin: auto; padding: 36px 20px 60px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+    h1 { font-size: 28px; margin: 0; letter-spacing: -.03em; }
+    h2 { font-size: 19px; margin: 0 0 12px; }
+    p { margin: 6px 0 16px; }
+    .muted, small { color: var(--muted); }
+    .panel { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 22px; margin: 16px 0; }
+    .devices { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    .device { border: 1px solid var(--line); border-radius: 12px; padding: 18px; overflow-wrap: anywhere; }
+    .device.selected { border: 2px solid var(--accent); padding: 17px; }
+    .device strong { display: block; margin-bottom: 8px; font-size: 18px; }
+    button { font: inherit; border: 0; border-radius: 9px; padding: 10px 17px; background: var(--accent); color: #fff; cursor: pointer; min-height: 44px; }
+    button.secondary { color: var(--accent); background: transparent; border: 1px solid var(--line); }
+    button:disabled { cursor: default; opacity: .6; }
+    button:focus-visible, input:focus-visible { outline: 3px solid #7eafff; outline-offset: 3px; }
+    label { display: block; margin: 12px 0 6px; }
+    input { font: inherit; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: inherit; padding: 10px; width: 100%; max-width: 480px; }
+    form button { margin: 12px 0 0 8px; }
+    .badge { display: inline-block; background: #e9f0ff; color: #165ed1; border-radius: 6px; padding: 2px 9px; font-size: 14px; margin-bottom: 12px; }
+    .routes { padding-left: 22px; margin: 8px 0; overflow-wrap: anywhere; }
+    .notice { color: var(--muted); min-height: 26px; }
+    .notice.error { color: #bb3030; }
+    [hidden] { display: none !important; }
+    details summary { cursor: pointer; min-height: 36px; }
+    @media (max-width: 480px) { main { padding: 24px 16px; } .panel { padding: 18px; } header { align-items: flex-start; } }
+    @media (prefers-color-scheme: dark) { :root { color: #e4eaf1; background: #121820; --card: #1b2531; --line: #344253; --muted: #a1afbf; --accent: #5797ff; } .badge { background: #253c62; color: #b4d0ff; } button { color: #101821; } button.secondary { color: #9bc1ff; } }
+  </style>
+</head>
+<body>
+<main>
+  <header><div><h1>网络出口</h1><span class="muted">选择设备，让指定网络通过它连接。</span></div><button id="refresh" class="secondary" type="button">刷新</button></header>
+  <p id="notice" class="notice" role="status" aria-live="polite">正在连接管理服务…</p>
+  <section id="gateway" class="panel" hidden>
+    <h2>出口设备</h2>
+    <p class="muted">切换对新连接生效。已有会话需要重新连接。</p>
+    <div id="devices" class="devices"></div>
+  </section>
+  <section id="routing" class="panel" hidden>
+    <h2>通过出口的网络</h2>
+    <ul id="routes" class="routes"></ul>
+    <small>列表来自当前运行的规则。设备是否能访问目标网络，需要实际连接确认。</small>
+  </section>
+  <details id="connection" class="panel">
+    <summary>管理连接</summary>
+    <p class="muted">输入访问口令。口令只保存在此浏览器，不会发送给其他服务。</p>
+    <form id="connect">
+      <label for="secret">访问口令</label>
+      <input id="secret" type="password" autocomplete="off" spellcheck="false">
+      <button type="submit">连接</button>
+      <button id="forget" type="button" class="secondary">清除口令</button>
+    </form>
+  </details>
+</main>
+<script>
+(() => {
+  'use strict';
+  const group = 'SSH-Gateway';
+  const storageKey = 'mihomo-router-access';
+  const $ = id => document.getElementById(id);
+  const params = new URLSearchParams(location.hash.slice(1));
+  let token = params.get('secret') || '';
+  try { token ||= localStorage.getItem(storageKey) || ''; } catch {}
+  if (params.has('secret')) history.replaceState(null, '', location.pathname + location.search);
+  $('secret').value = token;
+  let busy = false;
+  function notice(message, error = false) {
+    $('notice').textContent = message;
+    $('notice').className = error ? 'notice error' : 'notice';
+  }
+  async function api(path, options = {}) {
+    const response = await fetch(path, { ...options, cache: 'no-store', headers: {
+      ...(token ? { Authorization: 'Bearer ' + token } : {}),
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+    }});
+    if (!response.ok) {
+      if (response.status === 401) throw new Error('访问口令不正确，请在“管理连接”中重新输入。');
+      if (response.status === 404) throw new Error('出口配置尚未加载，请确认路由器已启用网络出口。');
+      throw new Error('管理请求失败（' + response.status + '），请刷新确认当前出口。');
+    }
+    return response.status === 204 ? null : response.json();
+  }
+  function renderDevices(state) {
+    $('devices').replaceChildren();
+    for (const name of state.all || []) {
+      const card = document.createElement('div');
+      const selected = name === state.now;
+      card.className = selected ? 'device selected' : 'device';
+      const title = document.createElement('strong'); title.textContent = name;
+      const badge = document.createElement('div'); badge.className = 'badge';
+      badge.textContent = selected ? '当前出口' : '可选择';
+      const button = document.createElement('button'); button.type = 'button';
+      button.textContent = selected ? '已选择' : '切换到此设备'; button.disabled = selected || busy;
+      button.addEventListener('click', () => select(name));
+      card.append(title, badge, document.createElement('br'), button);
+      $('devices').append(card);
+    }
+    if (!(state.all || []).length) $('devices').textContent = '还没有登记出口设备。';
+    $('gateway').hidden = false;
+  }
+  async function refresh() {
+    try {
+      const [state, data] = await Promise.all([api('/proxies/' + group), api('/rules')]);
+      renderDevices(state);
+      $('routes').replaceChildren();
+      for (const rule of data.rules || []) {
+        if (rule.proxy !== group) continue;
+        const item = document.createElement('li'); item.textContent = rule.payload || rule.type;
+        $('routes').append(item);
+      }
+      if (!$('routes').children.length) $('routes').textContent = '当前没有匹配此出口的规则。';
+      $('routing').hidden = false;
+      $('connection').open = false;
+      try { if (token) localStorage.setItem(storageKey, token); } catch {}
+      notice('已连接管理服务 · 当前出口：' + (state.now || '未选择'));
+    } catch (error) {
+      notice(error.message || '无法连接管理服务，请稍后刷新。', true);
+      $('gateway').hidden = true; $('routing').hidden = true;
+      $('connection').open = true;
+    }
+  }
+  async function select(name) {
+    if (busy) return;
+    busy = true;
+    for (const button of $('devices').querySelectorAll('button')) button.disabled = true;
+    notice('正在切换出口…');
+    let failure;
+    try { await api('/proxies/' + group, { method: 'PUT', body: JSON.stringify({ name }) }); }
+    catch (error) { failure = error; }
+    busy = false;
+    await refresh();
+    if (failure) notice(failure.message, true);
+  }
+  $('connect').addEventListener('submit', event => { event.preventDefault(); token = $('secret').value.trim(); refresh(); });
+  $('refresh').addEventListener('click', refresh);
+  $('forget').addEventListener('click', () => {
+    token = ''; $('secret').value = '';
+    try { localStorage.removeItem(storageKey); } catch {}
+    $('gateway').hidden = true; $('routing').hidden = true;
+    notice('已清除浏览器中的访问口令。'); $('connection').open = true;
+  });
+  refresh();
+})();
+</script>
+</body>
+</html>

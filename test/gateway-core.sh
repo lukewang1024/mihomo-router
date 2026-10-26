@@ -19,6 +19,8 @@ proxies:
     port: 8022
     username: test-user
     private-key: '$TEST_ROOT/key'
+    host-key-algorithms:
+      - ssh-ed25519
     host-key:
       - '$public_key'
   - name: laptop-b
@@ -27,6 +29,8 @@ proxies:
     port: 22
     username: test-user
     private-key: '$TEST_ROOT/key'
+    host-key-algorithms:
+      - ssh-ed25519
     host-key:
       - '$public_key'
 EOF
@@ -34,6 +38,7 @@ cat >"$TEST_ROOT/router.conf" <<EOF
 DATA_DIR=$TEST_ROOT/data
 RUN_DIR=$TEST_ROOT/run
 SSH_GATEWAY_ENABLED=1
+DASHBOARD_DIR=$PROJECT_DIR/share/ui
 SSH_GATEWAY_CIDRS="10.42.0.0/16"
 SSH_GATEWAY_DOMAINS="internal.example"
 SSH_GATEWAY_DNS=tcp://10.42.0.53:53
@@ -43,6 +48,6 @@ EOF
 awk '{print} /^dns:/ {print "  nameserver: [1.1.1.1]"}' "$PROJECT_DIR/test/fixtures/subscription.yaml" >"$TEST_ROOT/input.yaml"
 printf '%s\n' 'profile:' '  store-selected: false' '  store-fake-ip: true' >>"$TEST_ROOT/input.yaml"
 MIHOMO_ROUTER_CONFIG=$TEST_ROOT/router.conf "$PROJECT_DIR/bin/mihomo-router" render "$TEST_ROOT/input.yaml" "$TEST_ROOT/config.yaml"
-SAFE_PATHS=$TEST_ROOT "$core" -t -d "$TEST_ROOT/run" -f "$TEST_ROOT/config.yaml"
+SAFE_PATHS="$TEST_ROOT:$PROJECT_DIR/share/ui" "$core" -t -d "$TEST_ROOT/run" -f "$TEST_ROOT/config.yaml"
 grep -q '^  store-fake-ip: true$' "$TEST_ROOT/config.yaml"
 printf '%s\n' 'PASS: real Mihomo parsed SSH devices, DNS detour and selector configuration'

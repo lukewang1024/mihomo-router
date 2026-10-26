@@ -274,9 +274,10 @@ this feature does not add IPv6 interception or encrypted-DNS blocking.
 ## Management API and dashboards
 
 The default management API listens on `127.0.0.1:19090` on the router. Port 9090
-is commonly occupied by Xiaomi's datacenter service. This project does not
-currently install or mount a web dashboard; old ShellCrash UI files do not imply
-that Mihomo serves them. The API can be accessed through an SSH tunnel:
+is commonly occupied by Xiaomi's datacenter service. A lightweight gateway dashboard is shipped in `share/ui/index.html`. Set
+`DASHBOARD_DIR=/data/mihomo-router/share/ui` to serve it at `/ui/`; it displays
+active gateway devices and routes and switches devices without restarting.
+It does not require external assets or send credentials to another service. The API can be accessed through an SSH tunnel:
 
 ```sh
 ssh -N -L 19090:127.0.0.1:19090 YOUR_ROUTER_SSH_HOST
@@ -322,7 +323,9 @@ mihomo-router gateway init
 Use a dedicated router-to-endpoint SSH key, stored mode 600 below
 `/data/mihomo-router/ssh/`, and authorize only its public key on each endpoint.
 Keep inventories mode 600 and directories mode 700. Verify each device's SSH
-host public key through a trusted channel and fill `host-key`; Mihomo otherwise
+host public key through a trusted channel and fill `host-key`; set
+`host-key-algorithms` to match the pinned key (for example `ssh-ed25519`),
+otherwise negotiation may choose a different host key; Mihomo otherwise
 accepts arbitrary host keys. Device addresses, usernames and private keys belong
 only in the router's local files, never in subscriptions or this repository.
 Use DHCP reservations or stable LAN DNS names. Node names should use letters,
@@ -426,3 +429,27 @@ currently returns different bytes from its pinned checksum; that artifact was
 rejected and the existing pin was not changed. Check the router's already
 installed core before deployment; this validation does not promise that a newer
 core is compatible with its old vendor kernel.
+
+### Gateway dashboard
+
+The default controller remains on loopback. To access the dashboard directly
+from a trusted LAN, set `CONTROLLER_ADDRESS` to the router's specific LAN IP
+and port (not its WAN/all-interface address), set a private `CONTROLLER_SECRET`,
+and set `DASHBOARD_DIR=/data/mihomo-router/share/ui`. The token remains applied
+when the SSH gateway is disabled. `SSH_GATEWAY_API_SECRET` is supported for
+existing configurations; prefer the generic controller setting for new ones.
+
+Open `http://ROUTER_LAN_IP:19090/ui/`. Enter the access token once; the page stores
+it in that browser. A private onboarding link may use `#secret=TOKEN`; the fragment
+is not sent to the web server and is removed from browser history after loading.
+The page never embeds a deployment token in public HTML. It shows actual rules
+from the running core and clearly distinguishes selection from endpoint health.
+Changing the inventory still requires editing the private provider file and
+reloading the core; it does not expose SSH credentials in the browser.
+
+`make dashboard-test` uses Node's standard library to exercise authentication,
+rule display, device switching and failure handling without a browser/server.
+
+On RAM-backed routers, `MIHOMO_LOG_LEVEL=warning` can override a subscription's
+per-connection info logging. Empty keeps the subscription setting; accepted values
+are debug/info/warning/error/silent. Existing logs are not discarded automatically.

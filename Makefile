@@ -1,4 +1,4 @@
-.PHONY: test lint vm-test docker-test gateway-core-test
+.PHONY: test lint vm-test docker-test gateway-core-test dashboard-test
 
 test:
 	sh test/run.sh
@@ -18,3 +18,6 @@ docker-test:
 
 gateway-core-test:
 	sh test/gateway-core.sh
+
+dashboard-test:
+	node test/dashboard.cjs

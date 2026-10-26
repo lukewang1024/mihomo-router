@@ -39,6 +39,8 @@ SSH_GATEWAY_CIDRS="10.42.0.0/16"
 SSH_GATEWAY_DOMAINS="internal.example"
 SSH_GATEWAY_DNS=tcp://10.42.0.53:53
 SSH_GATEWAY_API_SECRET=fixture-token
+DASHBOARD_DIR=$PROJECT_DIR/share/ui
+MIHOMO_LOG_LEVEL=warning
 EOF
 "$controller" render "$fixture" "$render"
 has '^  mr-ssh-gateways:$' "$render"
@@ -48,11 +50,27 @@ has '^  store-selected: true$' "$render"
 has '^  - IP-CIDR,10.42.0.0/16,SSH-Gateway,no-resolve$' "$render"
 has '^  - DOMAIN-SUFFIX,internal.example,SSH-Gateway$' "$render"
 has "'+.internal.example': 'tcp://10.42.0.53:53#SSH-Gateway'" "$render"
+has '^log-level: warning$' "$render"
+has "^external-ui: '$PROJECT_DIR/share/ui'$" "$render"
 has "^secret: 'fixture-token'$" "$render"
 has '^  - name: PROXY$' "$render"
 has '^  - MATCH,PROXY$' "$render"
 has "path: '$inventory'" "$render"
 awk '/DOMAIN-SUFFIX,internal.example/ {a=NR} /MATCH,PROXY/ {b=NR} END {exit !(a && a<b)}' "$render" || fail 'gateway routing priority'
+
+# Dashboard authentication must survive disabling the gateway feature.
+printf '%s\n' 'SSH_GATEWAY_ENABLED=0' 'CONTROLLER_SECRET=fixture-token' >>"$MIHOMO_ROUTER_CONFIG"
+"$controller" render "$fixture" "$render"
+has "^secret: 'fixture-token'$" "$render"
+has "^external-ui: '$PROJECT_DIR/share/ui'$" "$render"
+if grep -q SSH-Gateway "$render"; then fail 'disabled gateway selector retained'; fi
+printf '%s\n' 'SSH_GATEWAY_ENABLED=1' >>"$MIHOMO_ROUTER_CONFIG"
+# Local dashboard assets override stale subscription download instructions.
+cp "$fixture" "$TEST_ROOT/old-ui.yaml"
+printf '%s\n' 'external-ui: /old-ui' 'external-ui-url: https://example.invalid/ui.zip' 'external-ui-name: old' >>"$TEST_ROOT/old-ui.yaml"
+"$controller" render "$TEST_ROOT/old-ui.yaml" "$render"
+has "^external-ui: '$PROJECT_DIR/share/ui'$" "$render"
+if grep -q '^external-ui-url:\|^external-ui-name:' "$render"; then fail 'stale dashboard override retained'; fi
 
 # Overlays are recomposed from the original active subscription on each start.
 export MOCK_CURL_SOURCE="$fixture" MOCK_CURL_FAIL=0
@@ -136,6 +154,7 @@ mkdir -p "$stage/data/mihomo-router/gateways"
 printf '%s\n' 'private inventory fixture' >"$stage/data/mihomo-router/gateways/proxies.yaml"
 "$PROJECT_DIR/install.sh" --root "$stage" >/dev/null
 has '^private inventory fixture$' "$stage/data/mihomo-router/gateways/proxies.yaml"
+[ -r "$stage/data/mihomo-router/share/ui/index.html" ] || fail 'gateway dashboard not installed'
 [ -r "$stage/data/mihomo-router/share/ssh-gateway.sh" ] || fail 'gateway helper not installed'
 [ -r "$stage/data/mihomo-router/share/ssh-gateway-overlay.awk" ] || fail 'gateway overlay not installed'
 [ -r "$stage/data/mihomo-router/share/ssh-gateways.yaml.example" ] || fail 'gateway device example not installed'
