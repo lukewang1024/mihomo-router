@@ -99,6 +99,28 @@ awk '/-A PREROUTING -p tcp -j MR_GATEWAY/ {a=NR} /-A PREROUTING -p tcp -m multip
 "$controller" firewall-down
 has 'nat -F MR_GATEWAY' "$MOCK_LOG"
 has 'nat -X MR_GATEWAY' "$MOCK_LOG"
+# A gateway endpoint must bypass every managed hook, not just private targets.
+printf '%s\n' 'BYPASS_SOURCE_CIDRS="192.168.31.50/32 192.168.31.51/32"' >>"$MIHOMO_ROUTER_CONFIG"
+: >"$MOCK_LOG"
+"$controller" firewall-up
+has 'nat -A MR_INGRESS -s 192.168.31.50/32 -j RETURN' "$MOCK_LOG"
+has 'mangle -A MR_INGRESS -s 192.168.31.51/32 -j RETURN' "$MOCK_LOG"
+has 'nat -A MR_INGRESS -s 192.168.31.0/24 -p udp --dport 53' "$MOCK_LOG"
+has 'nat -A MR_INGRESS -s 192.168.31.0/24 -d 198.18.0.0/16 -p tcp' "$MOCK_LOG"
+has 'mangle -A MR_INGRESS -s 192.168.31.0/24 -d 198.18.0.0/16 -p udp' "$MOCK_LOG"
+has 'nat -A MR_INGRESS -p tcp -j MR_GATEWAY' "$MOCK_LOG"
+if grep -q -- '-A PREROUTING -s 192.168.31.0/24' "$MOCK_LOG"; then fail 'managed rule escapes source exclusions'; fi
+awk '/nat -A MR_INGRESS -s 192.168.31.50/ {a=NR} /nat -A MR_INGRESS .*--dport 53/ {b=NR} END {exit !(a && a<b)}' "$MOCK_LOG" || fail 'DNS precedes source bypass'
+# Teardown works after exclusions are removed; vendor chains are never flushed.
+printf '%s\n' 'BYPASS_SOURCE_CIDRS=""' >>"$MIHOMO_ROUTER_CONFIG"
+"$controller" firewall-down
+has 'nat -F MR_INGRESS' "$MOCK_LOG"
+has 'mangle -X MR_INGRESS' "$MOCK_LOG"
+printf '%s\n' 'BYPASS_SOURCE_CIDRS="192.168.31.999/32"' >>"$MIHOMO_ROUTER_CONFIG"
+: >"$MOCK_LOG"
+"$controller" firewall-up >/dev/null 2>&1 && fail 'invalid source exclusion accepted'
+[ ! -s "$MOCK_LOG" ] || fail 'invalid source exclusion changed firewall'
+printf '%s\n' 'BYPASS_SOURCE_CIDRS=""' >>"$MIHOMO_ROUTER_CONFIG"
 printf '%s\n' 'SSH_GATEWAY_CIDRS="10.999.0.0/16"' >>"$MIHOMO_ROUTER_CONFIG"
 : >"$MOCK_LOG"
 "$controller" firewall-up >/dev/null 2>&1 && fail 'invalid CIDR accepted'

@@ -26,6 +26,10 @@ MMDB_TLS_INSECURE=1
 # Replace with the actual main LAN; omit an independent direct guest subnet.
 LAN_CIDRS="192.168.31.0/24"
 BYPASS_CIDRS="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4"
+# Exclude SSH/VPN gateway endpoints themselves from all managed capture,
+# including DNS, Fake-IP, UDP and private targets. Use reserved LAN addresses.
+# Example only: BYPASS_SOURCE_CIDRS="192.168.31.50/32"
+BYPASS_SOURCE_CIDRS=""
 CN_IPSET=cn_ip
 
 MIXED_PORT=7890

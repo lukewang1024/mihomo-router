@@ -502,6 +502,32 @@ On RAM-backed routers, `MIHOMO_LOG_LEVEL=warning` can override a subscription's
 per-connection info logging. Empty keeps the subscription setting; accepted values
 are debug/info/warning/error/silent. Existing logs are not discarded automatically.
 
+### Preventing gateway traffic from looping back
+
+Reserve each SSH/VPN endpoint's LAN address and put its `/32` in the private
+`BYPASS_SOURCE_CIDRS` setting, for example:
+
+```sh
+BYPASS_SOURCE_CIDRS="192.168.31.50/32"
+```
+
+This excludes the endpoint's own traffic from managed DNS, Fake-IP, private
+prefix capture, TCP redirection and UDP marking. It is independent of the
+selected gateway; list all endpoint source addresses that need this treatment.
+The endpoint must resolve names and reach its destinations through its own
+network/VPN, without relying on this router's proxy. Cached Fake-IP answers on
+an excluded endpoint may need to expire before its own applications recover.
+
+Without this exclusion, a gateway's outbound traffic can re-enter transparent
+capture. Depending on endpoint VPN/proxy routing, repeated connections can
+exhaust the core's file descriptors and router memory, affecting wireless
+operation too. Increasing the file descriptor limit is not a loop fix.
+
+The optional `MR_INGRESS` chains return excluded sources to the vendor's normal
+firewall processing; they do not globally accept packets or bypass vendor
+security. Teardown removes these chains even after the exclusion list changes.
+No endpoint addresses are discovered or committed automatically.
+
 ### Main Wi-Fi with a direct guest network
 
 Keep only the main network's IPv4 subnet in `LAN_CIDRS`. For example,
