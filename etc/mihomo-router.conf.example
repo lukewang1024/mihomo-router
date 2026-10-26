@@ -58,3 +58,14 @@ AD_RULES_URL=https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo
 AD_RULES_INTERVAL=86400
 # Use an existing subscription proxy/group when DIRECT cannot reach GitHub.
 AD_RULES_PROXY=DIRECT
+
+# Optional SSH network gateway. Device inventory/keys stay private on the router.
+# Run `mihomo-router gateway init`, then fill gateways/proxies.yaml.
+SSH_GATEWAY_ENABLED=0
+# Explicit remote prefixes only; local LAN destinations remain bypassed.
+SSH_GATEWAY_CIDRS=""
+# Domain suffixes without wildcard; requires TCP/TLS/HTTPS DNS through the group.
+SSH_GATEWAY_DOMAINS=""
+SSH_GATEWAY_DNS=
+# Optional controller secret override, shared by runtime config and switch command.
+SSH_GATEWAY_API_SECRET=

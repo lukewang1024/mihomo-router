@@ -3,9 +3,10 @@
 `mihomo-router` is a small, auditable replacement for the runtime parts of
 ShellCrash on older, vendor-modified OpenWrt routers using iptables.
 
-It intentionally does not manage proxy groups or edit node credentials.  It
-downloads a Clash-compatible subscription, applies the router compatibility
-overlay, validates it with Mihomo, and atomically activates it.
+It downloads a Clash-compatible subscription, applies router compatibility
+and optional routing overlays, validates it with Mihomo, and atomically
+activates it. Subscription node credentials and groups are preserved. An
+optional SSH gateway selector reads a separate, private local device inventory.
 
 ## Safety properties
 
@@ -284,3 +285,144 @@ ssh -N -L 19090:127.0.0.1:19090 YOUR_ROUTER_SSH_HOST
 A compatible dashboard can then connect to `http://127.0.0.1:19090` on the SSH
 client device. Keep the API on loopback unless authentication and access rules
 have been configured deliberately.
+
+## SSH network gateways: switch devices without editing routes
+
+The optional `SSH-Gateway` group sends selected remote prefixes/domain suffixes
+through an SSH server on a LAN device. The endpoint opens the destination TCP
+connection using its own network access. No extra proxy daemon, second VPN or
+root access is needed on that endpoint. Its SSH server must allow TCP forwarding.
+This is generic SSH forwarding: the endpoint can be a phone, laptop or server.
+
+Rules, devices and selection are independent:
+
+- `router.conf`: target IPv4 prefixes and domain suffixes; normally configured once.
+- `gateways/proxies.yaml`: private native Mihomo file-provider inventory. Each
+  device keeps its own address, port, username and verified host public key.
+- `SSH-Gateway`: manual selector, changed through the dashboard or the command
+  below. `profile.store-selected` persists the selection in the existing
+  `/data/mihomo-router/cache.db`. No service restart is needed for a switch.
+
+### Stage the router
+
+Upload/install the updated runtime using `mihomo-router-deploy upgrade --host
+YOUR_ROUTER_SSH_HOST` when the router is reachable. Upgrade includes both gateway
+helpers and the device example; existing inventories, keys and settings survive.
+The feature defaults to disabled and does not add routes until explicitly enabled.
+
+On the router (add the persistent command directory to this shell's PATH):
+
+```sh
+export PATH=/data/mihomo-router/bin:$PATH
+mihomo-router gateway init
+# Fill /data/mihomo-router/gateways/proxies.yaml using
+# /data/mihomo-router/share/ssh-gateways.yaml.example as a reference.
+```
+
+Use a dedicated router-to-endpoint SSH key, stored mode 600 below
+`/data/mihomo-router/ssh/`, and authorize only its public key on each endpoint.
+Keep inventories mode 600 and directories mode 700. Verify each device's SSH
+host public key through a trusted channel and fill `host-key`; Mihomo otherwise
+accepts arbitrary host keys. Device addresses, usernames and private keys belong
+only in the router's local files, never in subscriptions or this repository.
+Use DHCP reservations or stable LAN DNS names. Node names should use letters,
+numbers, dot, underscore and dash, e.g. `phone-a` and `laptop-b`.
+
+Add explicit settings to the private persistent `router.conf`, for example:
+
+```sh
+SSH_GATEWAY_ENABLED=1
+SSH_GATEWAY_CIDRS="10.42.0.0/16"
+SSH_GATEWAY_DOMAINS="internal.example"
+SSH_GATEWAY_DNS=tcp://10.42.0.53:53
+# Optional: set a private token here to override the subscription controller
+# secret consistently for the running core and gateway commands.
+SSH_GATEWAY_API_SECRET=
+```
+
+The addresses/domains above are examples, not a preset corporate network.
+Domain routes require a reachable TCP DNS, DNS-over-TLS or DNS-over-HTTPS server;
+its requests explicitly use `SSH-Gateway`. SSH cannot carry ordinary UDP DNS.
+If the subscription already has an exact DNS policy for a configured suffix,
+resolve that conflict first; duplicate managed policy keys are rejected.
+With no domain routes, DNS is left unchanged. The overlay preserves existing
+Fake-IP filters; if a target domain gets real private IPs, include their actual
+prefixes in `SSH_GATEWAY_CIDRS` so those connections are captured as well.
+
+Validate before activation, then restart once to load the inventory/group/rules:
+
+```sh
+mihomo-router gateway check
+mihomo-router-boot restart
+mihomo-router gateway status
+mihomo-router gateway use phone-a
+# Later, after enabling network access on the other device:
+mihomo-router gateway use laptop-b
+```
+
+From a client with the router SSH alias configured, switching is one command:
+
+```sh
+./bin/mihomo-router-deploy gateway --host YOUR_ROUTER_SSH_HOST use phone-a
+```
+
+`gateway check` tests configuration compatibility, not whether the endpoint or
+remote network is reachable. It does not replace the active subscription.
+The existing core validation fallback may defer parsing to startup if the pinned
+old core cannot run config-test; confirm startup and the live selector before use.
+`status` prints the selector's current device and available nodes as JSON.
+`use` changes only that selector via the controller API. A failed request returns
+an error; a lost HTTP response can leave the outcome unknown, so check `status`.
+The controller defaults to loopback. If a subscription has a nonempty API secret,
+set the matching `SSH_GATEWAY_API_SECRET` (which also becomes the runtime secret).
+Authentication is passed through a temporary mode-600 curl configuration, never
+in command arguments. The temporary file is removed after the request.
+
+### Routing boundaries
+
+Explicit target TCP prefixes are captured on every port before the usual
+private-network and real-IP port bypasses. Destinations within `LAN_CIDRS` and
+core-marked traffic still bypass this capture, so a broad remote prefix cannot
+swallow the local SSH endpoint. Prefer precise remote prefixes over `10/8`.
+The gateway firewall has a fixed owned chain/hook, so removal still works after
+changing the target prefixes. Domain routes take precedence over domestic/ad
+and subscription routing. The selector has no implicit DIRECT fallback.
+
+SSH outbounds carry TCP, not arbitrary UDP, ICMP or an entire IP VPN. Kerberos
+clients must be configured to use reachable KDCs over TCP when UDP would
+otherwise be chosen. Switching affects new connections; reconnect existing SSH
+sessions and applications when moving to another device. The SSH host must be
+reachable from the router; endpoints outside the LAN need a separately configured
+reverse SSH transport or another reachable address. No public SSH exposure is
+configured by this feature.
+
+### Acceptance after returning to the LAN
+
+1. Confirm the endpoint itself reaches an actual target service.
+2. Check `gateway check`, restart, and confirm the node names with `gateway status`.
+3. Select the endpoint and connect from a LAN client to a known target TCP port,
+   including one outside `TCP_PORTS`; inspect the matched group and `MR_GATEWAY`
+   counters. A successful public website request does not verify internal access.
+4. Test an internal domain with the configured DNS and Kerberos over TCP if used.
+5. Switch devices, reconnect, and confirm the new device handles the connection.
+6. Restart the router and verify the selected device is retained. Stop the service
+   and confirm the managed gateway firewall hook is removed.
+
+Preparation tests use isolated command mocks and never change the host firewall.
+Router/core compatibility, live DNS and endpoint connectivity require that LAN
+acceptance; they are not implied by passing the mock suite.
+
+The optional real-core parser test generates disposable keys and validates the
+rendered configuration without starting a service or changing the firewall:
+
+```sh
+MIHOMO_TEST_CORE=/absolute/path/to/mihomo make gateway-core-test
+```
+
+Preparation validation passed with the official Android ARM64 v1.19.33 core
+(archive SHA-256 verified against its GitHub release asset digest), in addition
+to `make test` and `make lint`. The mutable compatibility-core URL in the example
+currently returns different bytes from its pinned checksum; that artifact was
+rejected and the existing pin was not changed. Check the router's already
+installed core before deployment; this validation does not promise that a newer
+core is compatible with its old vendor kernel.

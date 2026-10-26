@@ -9,6 +9,7 @@ SCRIPT_DIR=$(CDPATH='' cd "$(dirname "$0")" && pwd)
 ROUTER_HOST=${MIHOMO_ROUTER_HOST:-}
 SOURCE_DIR=${MIHOMO_ROUTER_SOURCE:-$(CDPATH='' cd "$SCRIPT_DIR/.." && pwd)}
 SUBSCRIPTION_URL=
+DEPLOY_SSH=${MIHOMO_ROUTER_SSH:-ssh}
 
 usage() {
 	cat <<'EOF'
@@ -19,10 +20,13 @@ usage:
   mihomo-router-deploy upgrade --host HOST
   mihomo-router-deploy restart --host HOST
   mihomo-router-deploy status --host HOST
+  mihomo-router-deploy gateway --host HOST init|check|status
+  mihomo-router-deploy gateway --host HOST use DEVICE
 
 Environment:
   MIHOMO_ROUTER_HOST    SSH host, required unless --host is supplied
   MIHOMO_ROUTER_SOURCE  mihomo-router checkout (default: this repository)
+  MIHOMO_ROUTER_SSH     SSH executable (default: ssh)
 EOF
 }
 
@@ -57,7 +61,7 @@ awk -v url="$url" '
 chmod 600 "$tmp"
 mv "$tmp" "$config"
 REMOTE_SCRIPT
-	} | ssh "$ROUTER_HOST" 'IFS= read -r url; export url; sh -s'
+	} | "$DEPLOY_SSH" "$ROUTER_HOST" 'IFS= read -r url; export url; sh -s'
 }
 
 upload_runtime() {
@@ -65,7 +69,7 @@ upload_runtime() {
 	[ -r "$SOURCE_DIR/openwrt/mihomo-router.init" ] || die "missing OpenWrt init script"
 	[ -r "$SOURCE_DIR/etc/mihomo-router.conf.example" ] || die "missing config example"
 	[ -r "$SOURCE_DIR/share/domestic-overlay.awk" ] || die "missing domestic overlay"
-	ssh "$ROUTER_HOST" 'mkdir -p /tmp/mihomo-router-upload; chmod 700 /tmp/mihomo-router-upload'
+	"$DEPLOY_SSH" "$ROUTER_HOST" 'mkdir -p /tmp/mihomo-router-upload; chmod 700 /tmp/mihomo-router-upload'
 
 	scp -O \
 		"$SOURCE_DIR/bin/mihomo-router" \
@@ -73,16 +77,22 @@ upload_runtime() {
 		"$SOURCE_DIR/bin/mihomo-router-boot-include" \
 		"$SOURCE_DIR/install.sh" \
 		"$SOURCE_DIR/share/domestic-overlay.awk" \
+		"$SOURCE_DIR/share/ssh-gateway.sh" \
+		"$SOURCE_DIR/share/ssh-gateway-overlay.awk" \
+		"$SOURCE_DIR/etc/ssh-gateways.yaml.example" \
 		"$SOURCE_DIR/openwrt/mihomo-router.init" \
 		"$SOURCE_DIR/etc/mihomo-router.conf.example" \
 		"$ROUTER_HOST:/tmp/mihomo-router-upload/"
 
-	ssh "$ROUTER_HOST" '
+	# Expand this script on the router, not in the upload client.
+	# shellcheck disable=SC2016
+	"$DEPLOY_SSH" "$ROUTER_HOST" '
 		set -eu
 		stage=/tmp/mihomo-router-upload
 		mkdir -p "$stage/bin" "$stage/share" "$stage/openwrt" "$stage/etc"
 		mv "$stage/mihomo-router" "$stage/mihomo-router-boot" "$stage/mihomo-router-boot-include" "$stage/bin/"
-		mv "$stage/domestic-overlay.awk" "$stage/share/"
+		mv "$stage/domestic-overlay.awk" "$stage/ssh-gateway.sh" "$stage/ssh-gateway-overlay.awk" "$stage/share/"
+		mv "$stage/ssh-gateways.yaml.example" "$stage/etc/"
 		mv "$stage/mihomo-router.init" "$stage/openwrt/"
 		mv "$stage/mihomo-router.conf.example" "$stage/etc/"
 		sh "$stage/install.sh" --root /
@@ -91,7 +101,7 @@ upload_runtime() {
 }
 
 merge_geodata_defaults() {
-	ssh "$ROUTER_HOST" 'sh -s' <<'REMOTE_SCRIPT'
+	"$DEPLOY_SSH" "$ROUTER_HOST" 'sh -s' <<'REMOTE_SCRIPT'
 set -eu
 config=/data/mihomo-router/router.conf
 example=/data/mihomo-router/share/mihomo-router.conf.example
@@ -117,7 +127,7 @@ bootstrap_router() {
 	upload_runtime
 	merge_geodata_defaults
 	set_subscription
-	ssh "$ROUTER_HOST" '
+	"$DEPLOY_SSH" "$ROUTER_HOST" '
 		set -eu
 		/data/mihomo-router/bin/mihomo-router update
 		/data/mihomo-router/bin/mihomo-router-boot restart
@@ -127,7 +137,7 @@ bootstrap_router() {
 
 update_router() {
 	set_subscription
-	ssh "$ROUTER_HOST" '
+	"$DEPLOY_SSH" "$ROUTER_HOST" '
 		set -eu
 		/data/mihomo-router/bin/mihomo-router update
 		/data/mihomo-router/bin/mihomo-router-boot restart
@@ -139,7 +149,7 @@ upgrade_router() {
 	upload_runtime
 	merge_geodata_defaults
 	set_subscription
-	ssh "$ROUTER_HOST" 'set -eu; /data/mihomo-router/bin/mihomo-router-boot restart'
+	"$DEPLOY_SSH" "$ROUTER_HOST" 'set -eu; /data/mihomo-router/bin/mihomo-router-boot restart'
 	printf '%s\n' "mihomo-router runtime upgraded and restarted on $ROUTER_HOST"
 }
 
@@ -172,7 +182,12 @@ while [ "$#" -gt 0 ]; do
 			usage
 			exit 0
 			;;
+		--)
+			shift
+			break
+			;;
 		*)
+			[ "$command_name" != gateway ] || break
 			usage >&2
 			exit 2
 			;;
@@ -185,7 +200,21 @@ case "$command_name" in
 	bootstrap) bootstrap_router ;;
 	update) update_router ;;
 	upgrade) upgrade_router ;;
-	restart) ssh "$ROUTER_HOST" '/data/mihomo-router/bin/mihomo-router-boot restart' ;;
-	status) ssh "$ROUTER_HOST" '/data/mihomo-router/bin/mihomo-router status' ;;
+	restart) "$DEPLOY_SSH" "$ROUTER_HOST" '/data/mihomo-router/bin/mihomo-router-boot restart' ;;
+	status) "$DEPLOY_SSH" "$ROUTER_HOST" '/data/mihomo-router/bin/mihomo-router status' ;;
+	gateway)
+		case ${1:-} in
+			init|check|status)
+				[ "$#" -eq 1 ] || die "gateway action takes no extra arguments"
+				"$DEPLOY_SSH" "$ROUTER_HOST" "/data/mihomo-router/bin/mihomo-router gateway $1"
+				;;
+			use)
+				[ "$#" -eq 2 ] || die "gateway use requires a device name"
+				case $2 in ''|-*|*[!a-zA-Z0-9_.-]*) die "invalid gateway device name" ;; esac
+				"$DEPLOY_SSH" "$ROUTER_HOST" "/data/mihomo-router/bin/mihomo-router gateway use $2"
+				;;
+			*) die "gateway requires init, check, status or use DEVICE" ;;
+		esac
+		;;
 	*) usage >&2; exit 2 ;;
 esac
