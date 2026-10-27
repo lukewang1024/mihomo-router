@@ -612,3 +612,8 @@ and rule updates, and check memory use too: /tmp consumes RAM. A persistent
 core archive makes boot independent of a mutable download URL. Verify its
 unpacked hash and a fresh extraction/start before relying on it. Normal service
 restart tests do not establish full-router reboot persistence.
+
+For a Termux phone endpoint that authenticates but corrupts SSH packets while
+Android linker tracing is active, see
+[the scoped trace-descriptor workaround](contrib/termux/README.md). It includes
+source, build instructions and a descriptor test; normal endpoints need no shim.
