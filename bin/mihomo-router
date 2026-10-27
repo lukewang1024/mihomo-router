@@ -44,6 +44,14 @@ CONTROLLER_ADDRESS=${CONTROLLER_ADDRESS:-127.0.0.1:19090}
 DASHBOARD_DIR=${DASHBOARD_DIR:-}
 MIHOMO_LOG_LEVEL=${MIHOMO_LOG_LEVEL:-}
 CONTROLLER_SECRET=${CONTROLLER_SECRET:-${SSH_GATEWAY_API_SECRET:-}}
+AI_RULES_ENABLED=${AI_RULES_ENABLED:-0}
+AI_GROUP=${AI_GROUP:-AI-JP-SG}
+AI_NODE_INCLUDE=${AI_NODE_INCLUDE:-日本|新加坡}
+AI_NODE_EXCLUDE=${AI_NODE_EXCLUDE:-香港|HK|Hong Kong}
+AI_DOMAINS=${AI_DOMAINS:-}
+SNIFFER_ENABLED=${SNIFFER_ENABLED:-preserve}
+PANEL_ALLOWED_CIDRS=${PANEL_ALLOWED_CIDRS:-}
+PANEL_INTERFACE=${PANEL_INTERFACE:-br-lan}
 TUN_DEVICE=${TUN_DEVICE:-utun}
 ROUTE_TABLE=${ROUTE_TABLE:-100}
 ROUTE_MARK=${ROUTE_MARK:-0x1ed4}
@@ -55,6 +63,7 @@ IPTABLES=${IPTABLES:-iptables}
 IP=${IP:-ip}
 CURL=${CURL:-curl}
 GZIP=${GZIP:-gzip}
+XZ=${XZ:-xz}
 TAR=${TAR:-tar}
 CORE=$RUN_DIR/mihomo
 RUNTIME_CONFIG=$RUN_DIR/config.yaml
@@ -98,6 +107,7 @@ die() {
 # Shared optional SSH gateway support; no device addresses or keys live here.
 # shellcheck source=share/ssh-gateway.sh
 . "$SCRIPT_DIR/../share/ssh-gateway.sh"
+. "$SCRIPT_DIR/../share/panel.sh"
 
 ensure_dirs() {
 	mkdir -p "$DATA_DIR" "$RUN_DIR" || die "cannot create data directories"
@@ -170,6 +180,7 @@ unpack_core() {
 			[ -n "$unpack_member" ] || return 1
 			"$TAR" -xOzf "$unpack_input" "$unpack_member" >"$unpack_output" 2>/dev/null
 			;;
+		*.xz) "$XZ" -dc "$unpack_input" >"$unpack_output" ;;
 		*.gz) "$GZIP" -dc "$unpack_input" >"$unpack_output" ;;
 		*) cp "$unpack_input" "$unpack_output" ;;
 	esac
@@ -310,7 +321,7 @@ normalize_policy_config() {
 	return "$overlay_rc"
 }
 
-normalize_config() {
+normalize_gateway_config() {
     if [ "$SSH_GATEWAY_ENABLED" = 0 ]; then
         normalize_policy_config "$1" "$2"
         return $?
@@ -324,6 +335,15 @@ normalize_config() {
     gateway_rc=$?
     rm -f "$2.policy"
     return "$gateway_rc"
+}
+
+normalize_config() {
+    case "$AI_RULES_ENABLED:$SNIFFER_ENABLED" in [01]:preserve|[01]:0|[01]:1) ;; *) log "invalid feature flags"; return 1 ;; esac
+    normalize_gateway_config "$1" "$2.features" || { rm -f "$2.features"; return 1; }
+    awk -v enabled="$AI_RULES_ENABLED" -v group="$AI_GROUP" -v include="$AI_NODE_INCLUDE" -v exclude="$AI_NODE_EXCLUDE" -v domains="$AI_DOMAINS" -v sniff="$SNIFFER_ENABLED" -f "$SCRIPT_DIR/../share/ai-overlay.awk" "$2.features" >"$2"
+    feature_rc=$?
+    rm -f "$2.features"
+    return "$feature_rc"
 }
 
 validate_config() {
@@ -397,6 +417,7 @@ iptables_delete_all() {
 }
 
 firewall_down() {
+    panel_down
     # These wrappers are owned by us; returning here preserves vendor rules.
     # Remove them even if the current configuration no longer has exclusions.
     for ingress_table in nat mangle; do
@@ -506,6 +527,7 @@ firewall_up() {
 	"$IPTABLES" -w 5 -t mangle -A "$mangle_ingress" -p udp -m multiport --dports "$TCP_PORTS" -j "$MARK_CHAIN" || die "cannot install transparent proxy rule"
 	"$IP" rule add fwmark "$ROUTE_MARK" table "$ROUTE_TABLE" || die "cannot add policy rule"
 	"$IP" route add default dev "$TUN_DEVICE" table "$ROUTE_TABLE" || die "cannot add TUN route"
+    panel_up
 	log "transparent proxy and LAN DNS rules installed"
 }
 

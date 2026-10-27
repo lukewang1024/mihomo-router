@@ -567,3 +567,48 @@ IPv6, it can bypass the IPv4 proxy policy; configure IPv6 handling separately
 before treating that policy as complete. A network with link-local IPv6 only
 does not have that routed path. Verify both SSIDs with real clients after
 configuration, and verify persistence after a planned router reboot.
+
+
+## Optional AI routing, sniffing and controller access
+
+Set `AI_RULES_ENABLED=1`, an `AI_GROUP` name and a space-separated
+`AI_DOMAINS` suffix list in the private router configuration.
+`AI_NODE_INCLUDE` and `AI_NODE_EXCLUDE` are extended regular expressions over
+concrete subscription proxy names. The selector precedes subscription rules;
+the optional SSH gateway's specific target routes also remain present.
+Unmatched nodes, duplicate group names, and unsupported top-level inline YAML
+fail rendering. Provider-only subscriptions need another selection mechanism.
+Original subscription credentials and groups are retained. Overlays are rebuilt
+from the original subscription, so policy changes do not accumulate old rules.
+Manual selector choices persist in the core cache.
+
+`SNIFFER_ENABLED=preserve` retains subscription behavior (default); `1`
+enables HTTP/TLS/QUIC sniffing, forced DNS mapping, pure-IP parsing and destination
+overrides; `0` explicitly disables it. Sniffing cannot recover every domain
+from encrypted traffic and does not prove that a site's region checks pass.
+
+For a controller bound to a specific trusted IPv4 LAN address, configure
+`PANEL_ALLOWED_CIDRS` and `PANEL_INTERFACE`. Only matching source/interface
+pairs and loopback may reach its TCP port; other sources are rejected. A fixed
+owned dispatcher supports changed ports and idempotent teardown/reload, including
+migration of the old port-19090 MR_PANEL hook. Keep a private controller secret.
+The guard supports IPv4 listeners only; handle IPv6 separately.
+
+## Storage on small Xiaomi flash partitions
+
+Inspect mounts before choosing paths: /data, /etc and /userdisk can be aliases
+of the same UBIFS volume. Moving files among those aliases adds no capacity.
+Keep scripts, private configuration, compressed core, rule data and selector cache
+under /data/mihomo-router. Keep the unpacked executable, logs and temporary
+subscription files under /tmp/mihomo-router. The core loader accepts raw, .gz,
+.tar.gz and .xz files; .xz requires a working xz decompressor and can reduce
+flash usage substantially. Preserve an already proven vendor-kernel-compatible
+core rather than replacing it solely to match the controller version.
+
+Back up legacy files to a separate machine and verify the archive before
+retiring them. A compact built-in dashboard replaces the much larger legacy UI.
+Store historical snapshots off-router, retain flash headroom for atomic writes
+and rule updates, and check memory use too: /tmp consumes RAM. A persistent
+core archive makes boot independent of a mutable download URL. Verify its
+unpacked hash and a fresh extraction/start before relying on it. Normal service
+restart tests do not establish full-router reboot persistence.

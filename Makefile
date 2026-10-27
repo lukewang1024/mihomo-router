@@ -4,10 +4,11 @@ test:
 	sh test/run.sh
 	sh test/boot.sh
 	sh test/gateway.sh
+	sh test/features.sh
 
 lint:
-	sh -n bin/mihomo-router bin/mihomo-router-boot bin/mihomo-router-boot-include bin/mihomo-router-deploy install.sh openwrt/mihomo-router.init test/run.sh test/boot.sh test/netns.sh test/vm.sh test/mocks/* share/ssh-gateway.sh test/gateway.sh test/gateway-core.sh
-	shellcheck -s sh bin/mihomo-router bin/mihomo-router-boot bin/mihomo-router-boot-include bin/mihomo-router-deploy install.sh openwrt/mihomo-router.init test/run.sh test/boot.sh test/netns.sh test/vm.sh test/mocks/* share/ssh-gateway.sh test/gateway.sh test/gateway-core.sh
+	sh -n bin/mihomo-router bin/mihomo-router-boot bin/mihomo-router-boot-include bin/mihomo-router-deploy install.sh openwrt/mihomo-router.init test/run.sh test/boot.sh test/netns.sh test/vm.sh test/mocks/* share/ssh-gateway.sh share/panel.sh test/features.sh test/gateway.sh test/gateway-core.sh
+	shellcheck -s sh bin/mihomo-router bin/mihomo-router-boot bin/mihomo-router-boot-include bin/mihomo-router-deploy install.sh openwrt/mihomo-router.init test/run.sh test/boot.sh test/netns.sh test/vm.sh test/mocks/* share/ssh-gateway.sh share/panel.sh test/features.sh test/gateway.sh test/gateway-core.sh
 
 vm-test:
 	sh test/vm.sh

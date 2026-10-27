@@ -84,3 +84,17 @@ SSH_GATEWAY_DOMAINS=""
 SSH_GATEWAY_DNS=
 # Optional controller secret override, shared by runtime config and switch command.
 SSH_GATEWAY_API_SECRET=
+
+# Optional AI domain selector; matches concrete subscription proxy names (ERE).
+# Supply your own domain suffix list. Provider-only subscriptions are rejected.
+AI_RULES_ENABLED=0
+AI_GROUP=AI-JP-SG
+AI_NODE_INCLUDE='日本|新加坡'
+AI_NODE_EXCLUDE='香港|HK|Hong Kong'
+AI_DOMAINS=''
+# preserve keeps subscription settings; 1 enables HTTP/TLS/QUIC sniffing; 0 disables.
+SNIFFER_ENABLED=preserve
+# Optional IPv4 controller guard: explicit trusted sources on this interface.
+# Empty leaves controller access to the vendor firewall. Loopback is always allowed.
+PANEL_ALLOWED_CIDRS=''
+PANEL_INTERFACE=br-lan

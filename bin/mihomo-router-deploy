@@ -2,7 +2,7 @@
 
 set -eu
 
-PATH=/usr/bin:/bin:/usr/sbin:/sbin
+PATH=${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
 export PATH
 
 SCRIPT_DIR=$(CDPATH='' cd "$(dirname "$0")" && pwd)
@@ -76,6 +76,8 @@ upload_runtime() {
 		"$SOURCE_DIR/bin/mihomo-router-boot" \
 		"$SOURCE_DIR/bin/mihomo-router-boot-include" \
 		"$SOURCE_DIR/install.sh" \
+		"$SOURCE_DIR/share/ai-overlay.awk" \
+		"$SOURCE_DIR/share/panel.sh" \
 		"$SOURCE_DIR/share/domestic-overlay.awk" \
 		"$SOURCE_DIR/share/ui/index.html" \
 		"$SOURCE_DIR/share/ssh-gateway.sh" \
@@ -93,7 +95,7 @@ upload_runtime() {
 		mkdir -p "$stage/bin" "$stage/share/ui" "$stage/openwrt" "$stage/etc"
 		mv "$stage/index.html" "$stage/share/ui/index.html"
 		mv "$stage/mihomo-router" "$stage/mihomo-router-boot" "$stage/mihomo-router-boot-include" "$stage/bin/"
-		mv "$stage/domestic-overlay.awk" "$stage/ssh-gateway.sh" "$stage/ssh-gateway-overlay.awk" "$stage/share/"
+		mv "$stage/ai-overlay.awk" "$stage/panel.sh" "$stage/domestic-overlay.awk" "$stage/ssh-gateway.sh" "$stage/ssh-gateway-overlay.awk" "$stage/share/"
 		mv "$stage/ssh-gateways.yaml.example" "$stage/etc/"
 		mv "$stage/mihomo-router.init" "$stage/openwrt/"
 		mv "$stage/mihomo-router.conf.example" "$stage/etc/"
