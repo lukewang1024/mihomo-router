@@ -30,6 +30,10 @@ BYPASS_CIDRS="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.
 # including DNS, Fake-IP, UDP and private targets. Use reserved LAN addresses.
 # Example only: BYPASS_SOURCE_CIDRS="192.168.31.50/32"
 BYPASS_SOURCE_CIDRS=""
+# all bypasses the endpoint entirely (legacy default). gateway bypasses only
+# endpoint DNS/private gateway prefixes, and renders source-aware DIRECT
+# exceptions for gateway domains. Public traffic retains subscription routing.
+BYPASS_SOURCE_MODE=all
 CN_IPSET=cn_ip
 
 MIXED_PORT=7890

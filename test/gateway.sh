@@ -111,6 +111,22 @@ has 'mangle -A MR_INGRESS -s 192.168.31.0/24 -d 198.18.0.0/16 -p udp' "$MOCK_LOG
 has 'nat -A MR_INGRESS -p tcp -j MR_GATEWAY' "$MOCK_LOG"
 if grep -q -- '-A PREROUTING -s 192.168.31.0/24' "$MOCK_LOG"; then fail 'managed rule escapes source exclusions'; fi
 awk '/nat -A MR_INGRESS -s 192.168.31.50/ {a=NR} /nat -A MR_INGRESS .*--dport 53/ {b=NR} END {exit !(a && a<b)}' "$MOCK_LOG" || fail 'DNS precedes source bypass'
+# Scoped mode retains public transparency and prevents gateway recursion.
+printf '%s\n' 'BYPASS_SOURCE_MODE=gateway' >>"$MIHOMO_ROUTER_CONFIG"
+: >"$MOCK_LOG"
+"$controller" firewall-up
+has 'nat -A MR_INGRESS -s 192.168.31.50/32 -p udp --dport 53 -j RETURN' "$MOCK_LOG"
+has 'mangle -A MR_INGRESS -s 192.168.31.51/32 -d 10.42.0.0/16 -j RETURN' "$MOCK_LOG"
+if grep -q -- '-s 192.168.31.50/32 -j RETURN' "$MOCK_LOG"; then fail 'scoped mode bypassed all endpoint traffic'; fi
+"$controller" render "$fixture" "$render"
+has 'AND,((SRC-IP-CIDR,192.168.31.50/32),(DOMAIN-SUFFIX,internal.example)),DIRECT' "$render"
+has 'AND,((SRC-IP-CIDR,192.168.31.51/32),(IP-CIDR,10.42.0.0/16,no-resolve)),DIRECT' "$render"
+awk '/AND,.*internal.example/ {a=NR} /DOMAIN-SUFFIX,internal.example,SSH-Gateway/ {b=NR} END {exit !(a && a<b)}' "$render" || fail 'source guard must precede gateway routes'
+printf '%s\n' 'BYPASS_SOURCE_MODE=invalid' >>"$MIHOMO_ROUTER_CONFIG"
+: >"$MOCK_LOG"
+"$controller" firewall-up >/dev/null 2>&1 && fail 'invalid bypass mode accepted'
+[ ! -s "$MOCK_LOG" ] || fail 'invalid mode changed firewall'
+printf '%s\n' 'BYPASS_SOURCE_MODE=all' >>"$MIHOMO_ROUTER_CONFIG"
 # Teardown works after exclusions are removed; vendor chains are never flushed.
 printf '%s\n' 'BYPASS_SOURCE_CIDRS=""' >>"$MIHOMO_ROUTER_CONFIG"
 "$controller" firewall-down

@@ -14,8 +14,14 @@ if grep -q /data/mihomo-router/bin/boot-include "$TEST_ROOT/data/auto_start.sh";
 	fail 'obsolete recovery hook retained'
 fi
 [ -L "$TEST_ROOT/etc/mihomo-router.conf" ] || fail 'config alias missing'
-[ -L "$TEST_ROOT/etc/init.d/mihomo-router" ] || fail 'init alias missing'
+[ ! -L "$TEST_ROOT/etc/init.d/mihomo-router" ] || fail 'init symlink changes procd service identity'
+[ -x "$TEST_ROOT/etc/init.d/mihomo-router" ] || fail 'init copy missing'
 grep -q '192.168.0.0/24' "$TEST_ROOT/data/mihomo-router/router.conf" || fail 'upgrade lost router settings'
+# Migrate a previously installed init symlink to a regular executable.
+rm "$TEST_ROOT/etc/init.d/mihomo-router"
+ln -s ../../data/mihomo-router/share/mihomo-router.init "$TEST_ROOT/etc/init.d/mihomo-router"
+MIHOMO_ROUTER_ROOT=$TEST_ROOT "$TEST_ROOT/data/mihomo-router/bin/mihomo-router-boot" setup
+[ ! -L "$TEST_ROOT/etc/init.d/mihomo-router" ] || fail 'old init symlink not migrated'
 # Atomic subscription writes must update persistent config, keeping the alias.
 printf "%s\n" "Url='https://fixture.invalid/changed'" >"$TEST_ROOT/migration.cfg"
 MIHOMO_ROUTER_CONFIG=$TEST_ROOT/etc/mihomo-router.conf "$TEST_ROOT/data/mihomo-router/bin/mihomo-router" migrate-shellcrash "$TEST_ROOT/migration.cfg" >/dev/null

@@ -18,7 +18,11 @@ setup() {
 	fi
 	chmod 600 "$MR/router.conf"
 	ln -sf ../data/mihomo-router/router.conf "$ROOT/etc/mihomo-router.conf"
-	ln -sf ../../data/mihomo-router/share/mihomo-router.init "$ROOT/etc/init.d/mihomo-router"
+	# rc.common names procd services after symlink targets. A copied init
+	# keeps the same service identity at firmware boot and later upgrades.
+	cp "$MR/share/mihomo-router.init" "$ROOT/etc/init.d/mihomo-router.new"
+	chmod 755 "$ROOT/etc/init.d/mihomo-router.new"
+	mv "$ROOT/etc/init.d/mihomo-router.new" "$ROOT/etc/init.d/mihomo-router"
 	# Retire the one-off recovery hook used before this helper was packaged.
 	if [ -r "$ROOT/data/auto_start.sh" ] && grep -q '^/bin/sh /data/mihomo-router/bin/boot-include$' "$ROOT/data/auto_start.sh"; then
 		sed '\|^/bin/sh /data/mihomo-router/bin/boot-include$|d' "$ROOT/data/auto_start.sh" >"$ROOT/data/auto_start.sh.new"
@@ -93,6 +97,9 @@ start_service() {
 	rm -f "$MR/.disabled"
 	disable_shellcrash
 	setup
+	if command -v ubus >/dev/null 2>&1; then
+		ubus call service delete '{"name":"mihomo-router.init"}' >/dev/null 2>&1 || :
+	fi
 	register_boot
 	if [ "$ACTION" = restart ]; then
 		/etc/init.d/mihomo-router stop

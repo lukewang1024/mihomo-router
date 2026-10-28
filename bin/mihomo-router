@@ -35,6 +35,7 @@ LAN_CIDRS=${LAN_CIDRS:-192.168.31.0/24}
 BYPASS_CIDRS=${BYPASS_CIDRS:-"0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4"}
 # Endpoint traffic must not re-enter its own router proxy/SSH gateway.
 BYPASS_SOURCE_CIDRS=${BYPASS_SOURCE_CIDRS:-}
+BYPASS_SOURCE_MODE=${BYPASS_SOURCE_MODE:-all}
 CN_IPSET=${CN_IPSET:-cn_ip}
 MIXED_PORT=${MIXED_PORT:-7890}
 REDIR_PORT=${REDIR_PORT:-7892}
@@ -327,10 +328,13 @@ normalize_gateway_config() {
         return $?
     fi
     gateway_settings || return 1
+    validate_source_bypasses
+    gateway_bypass_sources=
+    [ "$BYPASS_SOURCE_MODE" != gateway ] || gateway_bypass_sources=$BYPASS_SOURCE_CIDRS
     normalize_policy_config "$1" "$2.policy" || { rm -f "$2.policy"; return 1; }
     awk -v devices="$SSH_GATEWAY_FILE" -v cidrs="$SSH_GATEWAY_CIDRS" \
         -v domains="$SSH_GATEWAY_DOMAINS" -v resolver="$SSH_GATEWAY_DNS" \
-        -v api_secret="$SSH_GATEWAY_API_SECRET" \
+        -v api_secret="$SSH_GATEWAY_API_SECRET" -v bypass_sources="$gateway_bypass_sources" \
         -f "$SCRIPT_DIR/../share/ssh-gateway-overlay.awk" "$2.policy" >"$2"
     gateway_rc=$?
     rm -f "$2.policy"
@@ -460,6 +464,10 @@ firewall_down() {
 }
 
 validate_source_bypasses() {
+    case "$BYPASS_SOURCE_MODE" in all|gateway) ;; *) die "BYPASS_SOURCE_MODE must be all or gateway" ;; esac
+    if [ "$BYPASS_SOURCE_MODE" = gateway ] && [ -n "$BYPASS_SOURCE_CIDRS" ]; then
+        [ "$SSH_GATEWAY_ENABLED" = 1 ] || die "gateway source bypass requires SSH_GATEWAY_ENABLED=1"
+    fi
     printf '%s\n' "$BYPASS_SOURCE_CIDRS" | awk '
         { for (i=1;i<=NF;i++) {
             if (split($i,p,"/")!=2 || p[2]!~/^[0-9]+$/ || p[2]>32 ||
@@ -480,7 +488,18 @@ firewall_up() {
         for ingress_table in nat mangle; do
             "$IPTABLES" -w 5 -t "$ingress_table" -N MR_INGRESS || die "cannot create source bypass chain"
             for source_cidr in $BYPASS_SOURCE_CIDRS; do
-                "$IPTABLES" -w 5 -t "$ingress_table" -A MR_INGRESS -s "$source_cidr" -j RETURN || die "cannot bypass endpoint source"
+                if [ "$BYPASS_SOURCE_MODE" = all ]; then
+                    "$IPTABLES" -w 5 -t "$ingress_table" -A MR_INGRESS -s "$source_cidr" -j RETURN || die "cannot bypass endpoint source"
+                else
+                    # The endpoint needs real DNS, but ordinary public traffic
+                    # must still use transparent subscription routing.
+                    for source_dns_proto in tcp udp; do
+                        "$IPTABLES" -w 5 -t "$ingress_table" -A MR_INGRESS -s "$source_cidr" -p "$source_dns_proto" --dport 53 -j RETURN || die "cannot bypass endpoint DNS"
+                    done
+                    for source_target in $SSH_GATEWAY_CIDRS; do
+                        "$IPTABLES" -w 5 -t "$ingress_table" -A MR_INGRESS -s "$source_cidr" -d "$source_target" -j RETURN || die "cannot bypass endpoint gateway destination"
+                    done
+                fi
             done
             "$IPTABLES" -w 5 -t "$ingress_table" -A PREROUTING -j MR_INGRESS || die "cannot attach source bypass chain"
         done

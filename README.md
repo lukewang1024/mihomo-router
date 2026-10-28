@@ -130,7 +130,8 @@ that negotiate formats return Clash YAML rather than legacy/base64 content.
 
 The installer stores configuration in `/data/mihomo-router/router.conf` and
 the init script in `/data/mihomo-router/share/mihomo-router.init`. The `/etc`
-paths are symlinks for compatibility. Existing configuration is migrated
+configuration path is a symlink for compatibility; the init script is an atomic
+copy so procd uses the same service name at boot and after upgrades. Existing configuration is migrated
 without replacing router settings or credentials. Edit the persistent config
 path when using an editor that saves by replacing files.
 
@@ -521,7 +522,7 @@ Reserve each SSH/VPN endpoint's LAN address and put its `/32` in the private
 BYPASS_SOURCE_CIDRS="192.168.31.50/32"
 ```
 
-This excludes the endpoint's own traffic from managed DNS, Fake-IP, private
+With the default `BYPASS_SOURCE_MODE=all`, this excludes the endpoint's own traffic from managed DNS, Fake-IP, private
 prefix capture, TCP redirection and UDP marking. It is independent of the
 selected gateway; list all endpoint source addresses that need this treatment.
 The endpoint must resolve names and reach its destinations through its own
@@ -532,6 +533,17 @@ Without this exclusion, a gateway's outbound traffic can re-enter transparent
 capture. Depending on endpoint VPN/proxy routing, repeated connections can
 exhaust the core's file descriptors and router memory, affecting wireless
 operation too. Increasing the file descriptor limit is not a loop fix.
+
+For a phone that must also use the router's public proxy, set
+`BYPASS_SOURCE_MODE=gateway` (requires the SSH gateway). Endpoint port-53
+queries and configured private gateway destination prefixes bypass capture;
+other public/Fake-IP traffic still uses subscription routing. Source-aware
+DIRECT rules precede the SSH gateway's domain/prefix rules so the endpoint's
+forwarded connections can never select its own SSH outbound. This includes
+public-address domains matching the gateway policy, not just private prefixes.
+The phone's VPN remains responsible for reaching the actual internal network;
+the router does not send the endpoint's own internal traffic back to it.
+Clear stale client DNS/connection caches after changing DNS ownership.
 
 The optional `MR_INGRESS` chains return excluded sources to the vendor's normal
 firewall processing; they do not globally accept packets or bypass vendor
@@ -617,3 +629,36 @@ For a Termux phone endpoint that authenticates but corrupts SSH packets while
 Android linker tracing is active, see
 [the scoped trace-descriptor workaround](contrib/termux/README.md). It includes
 source, build instructions and a descriptor test; normal endpoints need no shim.
+
+
+### Testing real LAN ingress on a kernel without veth
+
+A request made on the router with an explicit HTTP/SOCKS proxy does not verify
+transparent LAN forwarding. `test/helpers/tap-relay.c` is a small, static,
+libc-free Linux/AArch64 relay that connects two TAP interfaces across an isolated
+network namespace. It lets an ordinary curl process traverse the router's real
+bridge ingress, DNS redirect and transparent capture without any client VPN or
+explicit proxy. Interfaces and namespace are deleted after the test.
+
+Build on an AArch64 workstation with clang/lld:
+
+```sh
+clang --target=aarch64-linux-gnu -nostdlib -static -fuse-ld=lld -O2 \
+  -ffreestanding -fno-stack-protector -fno-builtin -Wall -Wextra -Werror \
+  -Wl,-e,_start test/helpers/tap-relay.c -o /path/to/scratch/tap-relay
+```
+
+Copy the helper, `test/tap-client.sh` and a trusted public CA bundle into the
+router's private temporary test directory. Supply `TAP_RELAY`, `LAN_BRIDGE`,
+`TEST_CIDR` (an unused client address), `TEST_GATEWAY`, `TEST_DNS`, `TEST_CA`,
+`TEST_URL` and `TEST_EXPECT_HTTP`, then run the script as root. It targets the
+older vendor BusyBox `timeout -t` syntax. `TEST_DNS_KIND=fake` asserts the main
+LAN resolver's default fake-IP range; `real` checks a direct guest resolver.
+Use a genuine HTTPS target and expected status; TLS verification stays enabled.
+CA bundle age on old firmware is independent of forwarding health.
+
+This changes only disposable test interfaces and temporary namespace resolver
+files; it does not configure live LAN policy. Confirm the chosen test address is
+unused first, and remove uploaded binaries/certificates after acceptance. Packet
+captures, unit mocks and a successful explicit proxy request are complementary
+to this test, not replacements for client ingress verification.

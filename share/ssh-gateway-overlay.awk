@@ -19,7 +19,13 @@ function group(n) {
     print pad(n+2) "use:"
     print pad(n+4) "- mr-ssh-gateways"
 }
-function routes(n, j) {
+function routes(n, j, k) {
+    # The source endpoint must never dial its own SSH outbound. Match exactly
+    # the gateway's domain/prefix predicates, retaining proxying elsewhere.
+    for(k=1;k<=source_count;k++) {
+        for(j=1;j<=domain_count;j++) print pad(n) "- AND,((SRC-IP-CIDR," source[k] "),(DOMAIN-SUFFIX," domain[j] ")),DIRECT"
+        for(j=1;j<=cidr_count;j++) print pad(n) "- AND,((SRC-IP-CIDR," source[k] "),(IP-CIDR," cidr[j] ",no-resolve)),DIRECT"
+    }
     for(j=1;j<=domain_count;j++) print pad(n) "- DOMAIN-SUFFIX," domain[j] ",SSH-Gateway"
     for(j=1;j<=cidr_count;j++) print pad(n) "- IP-CIDR," cidr[j] ",SSH-Gateway,no-resolve"
 }
@@ -46,6 +52,7 @@ function dns_section(start, stop, base, j, key, value, end, n, have_policy) {
 END {
     if(bad) exit 1
     domain_count=split(domains,domain," "); cidr_count=split(cidrs,cidr," ")
+    source_count=split(bypass_sources,source," ")
     for(i=1;i<=NR;i++) {
         if(line[i] ~ /^[ ]*[\047\042]?mr-ssh-gateways[\047\042]?:/ ||
            line[i] ~ /^[ ]*-[ ]*name:[ ]*[\047\042]?SSH-Gateway[\047\042]?[ ]*(#.*)?$/)
