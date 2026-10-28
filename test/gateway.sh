@@ -50,24 +50,6 @@ has '^  store-selected: true$' "$render"
 has '^  - IP-CIDR,10.42.0.0/16,SSH-Gateway,no-resolve$' "$render"
 has '^  - DOMAIN-SUFFIX,internal.example,SSH-Gateway$' "$render"
 has "'+.internal.example': 'tcp://10.42.0.53:53#SSH-Gateway'" "$render"
-cat >>"$MIHOMO_ROUTER_CONFIG" <<EOF
-SSH_GATEWAY_FAILOVER=1
-SSH_GATEWAY_HEALTH_URL=http://health.internal.example/
-JSONFILTER=true
-EOF
-"$controller" render "$fixture" "$render"
-has '^  - name: SSH-Gateway-Route$' "$render"
-has 'proxies: \[DIRECT, SSH-Gateway\]' "$render"
-has 'DOMAIN-SUFFIX,internal.example,SSH-Gateway-Route$' "$render"
-has "tcp://10.42.0.53:53#SSH-Gateway-Route" "$render"
-for setting in 'SSH_GATEWAY_HEALTH_INTERVAL=1' 'SSH_GATEWAY_HEALTH_TIMEOUT=30000' 'SSH_GATEWAY_HEALTH_THRESHOLD=02' 'SSH_GATEWAY_HEALTH_EXPECTED=399-200' 'SSH_GATEWAY_HEALTH_URL='; do
-    cp "$MIHOMO_ROUTER_CONFIG" "$TEST_ROOT/good.conf"
-    printf '%s\n' "$setting" >>"$MIHOMO_ROUTER_CONFIG"
-    "$controller" render "$fixture" "$render" >/dev/null 2>&1 && fail "invalid health setting accepted: $setting"
-    cp "$TEST_ROOT/good.conf" "$MIHOMO_ROUTER_CONFIG"
-done
-printf '%s\n' 'SSH_GATEWAY_FAILOVER=0' >>"$MIHOMO_ROUTER_CONFIG"
-"$controller" render "$fixture" "$render"
 has '^log-level: warning$' "$render"
 has "^external-ui: '$PROJECT_DIR/share/ui'$" "$render"
 has "^secret: 'fixture-token'$" "$render"

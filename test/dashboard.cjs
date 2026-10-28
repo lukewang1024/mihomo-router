@@ -27,14 +27,11 @@ let subscription = '自动';
 let authorized = true;
 let putFailure = false;
 let gatewayEnabled = true;
-let failoverEnabled = false;
-let effective = 'DIRECT';
 let mode = 'rule';
 function proxies() {
   return {
     GLOBAL: { type: 'Selector', now: manual, all: ['DIRECT', manual] },
     ...(gatewayEnabled ? { 'SSH-Gateway': { type: 'Selector', now: selected, all: ['phone-main', 'laptop-b'] } } : {}),
-    ...(gatewayEnabled && failoverEnabled ? { 'SSH-Gateway-Route': { type: 'Selector', now: effective, all: ['DIRECT', 'SSH-Gateway'], hidden: true } } : {}),
     [manual]: { type: 'Selector', now: subscription, all: ['自动', 'node-a', unsafe] },
     '自动': { type: 'URLTest', now: 'node-a', all: ['node-a'] },
     '均衡': { type: 'LoadBalance', all: ['node-a'] },
@@ -57,12 +54,11 @@ const context = {
       const name = decodeURIComponent(url.slice('/proxies/'.length));
       const target = JSON.parse(options.body).name;
       if (name === 'SSH-Gateway') selected = target;
-      else if (name === 'SSH-Gateway-Route') effective = target;
       else { assert.equal(name, manual); subscription = target; }
       return { ok: true, status: 204 };
     }
     const data = {
-      '/rules': { rules: [{ proxy: failoverEnabled ? 'SSH-Gateway-Route' : 'SSH-Gateway', payload: '10.42.0.0/16' }, { proxy: manual, type: 'Match' }] },
+      '/rules': { rules: [{ proxy: 'SSH-Gateway', payload: '10.42.0.0/16' }, { proxy: manual, type: 'Match' }] },
       '/proxies': { proxies: proxies() },
       '/configs': { mode },
       '/connections': { connections: [{ metadata: { host: 'example.com', sourceIP: '192.168.31.2', destinationPort: '443' }, rule: 'Match', chains: ['node-a', manual] }] },
@@ -112,19 +108,6 @@ function card(title) {
   assert.match(elements.notice.textContent, /500/);
   assert.equal(elements.refresh.disabled, false);
   putFailure = false;
-
-  failoverEnabled = true;
-  await elements.refresh.handlers.click();
-  assert.match(elements['gateway-summary'].textContent, /当前直连/);
-  assert.match(elements.notice.textContent, /直连回退/);
-  assert.equal(card('SSH-Gateway-Route'), undefined);
-  assert.equal(elements.routes.children[0].textContent, '10.42.0.0/16');
-  effective = 'SSH-Gateway';
-  await elements.refresh.handlers.click();
-  assert.match(elements['gateway-summary'].textContent, /检查通过/);
-  await elements.devices.children[0].children[3].handlers.click();
-  assert.equal(selected, 'phone-main');
-  assert.equal(effective, 'DIRECT');
 
   gatewayEnabled = false;
   await elements.refresh.handlers.click();

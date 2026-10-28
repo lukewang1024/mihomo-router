@@ -8,6 +8,11 @@ and optional routing overlays, validates it with Mihomo, and atomically
 activates it. Subscription node credentials and groups are preserved. An
 optional SSH gateway selector reads a separate, private local device inventory.
 
+For the current fixed-gateway setup, see [fixed SSH gateway setup](docs/ssh-gateway-setup.md):
+main-network proxying, direct guest access, static loop prevention and failure
+without an automatic health monitor. Examples contain only placeholder domains
+and device information; keep deployment-specific settings on the device.
+
 ## Safety properties
 
 - The subscription's Mihomo DNS settings are preserved, including dedicated
@@ -423,9 +428,7 @@ remote network is reachable. It does not replace the active subscription.
 The existing core validation fallback may defer parsing to startup if the pinned
 old core cannot run config-test; confirm startup and the live selector before use.
 `status` prints the selector's current device and available nodes as JSON.
-With automatic fallback enabled it also prints the effective route as JSON.
-`use` changes that selector via the controller API (and resets automatic routing
-to DIRECT until the new device passes its checks). A failed request returns
+`use` changes only that selector via the controller API. A failed request returns
 an error; a lost HTTP response can leave the outcome unknown, so check `status`.
 The controller defaults to loopback. If a subscription has a nonempty API secret,
 set the matching `SSH_GATEWAY_API_SECRET` (which also becomes the runtime secret).
@@ -440,74 +443,11 @@ core-marked traffic still bypass this capture, so a broad remote prefix cannot
 swallow the local SSH endpoint. Prefer precise remote prefixes over `10/8`.
 The gateway firewall has a fixed owned chain/hook, so removal still works after
 changing the target prefixes. Domain routes take precedence over domestic/ad
-and subscription routing. Automatic DIRECT fallback is optional; see below.
-
-### Automatic fallback when the selected gateway is unavailable
-
-Set these in the private router configuration, then check and restart:
-
-```sh
-SSH_GATEWAY_FAILOVER=1
-SSH_GATEWAY_HEALTH_URL=http://health.internal.example/
-SSH_GATEWAY_HEALTH_EXPECTED=200-399
-SSH_GATEWAY_HEALTH_INTERVAL=60
-SSH_GATEWAY_HEALTH_TIMEOUT=3000
-SSH_GATEWAY_HEALTH_THRESHOLD=2
-```
-
-Use a small, stable internal endpoint that requires the gateway's VPN. A public
-test URL proves neither private routing nor VPN health. The core sends HEAD
-requests, does not follow redirects, and validates HTTPS certificates. HTTP
-probes are availability checks, not endpoint authentication. No login/session
-token belongs in the probe URL. `jsonfilter` must be installed on the router.
-
-The user still selects devices in `SSH-Gateway`. A hidden `SSH-Gateway-Route`
-selector chooses between that device group and DIRECT. Both private traffic
-and private-domain DNS use the effective route. The dashboard shows the
-effective state separately from the selected device. The managed panel and CLI
-reset to DIRECT when choosing another device, until it passes checks.
-
-One small background shell probes only the selected device every interval.
-Two consecutive failures switch new connections to DIRECT; two successes
-restore the selected device. Startup begins with DIRECT, ignoring a cached
-healthy route until rechecked. At the default settings outage detection
-normally takes about 60–126 seconds; boot/recovery also waits for consecutive
-successes. Changing routes does not restart Mihomo or rebuild firewall rules.
-Single failures/successes do not flap a previously established route.
-
-Health samples and credentials stay in mode-protected `/tmp` files and are
-removed on shutdown. API requests only change the route on transitions; the
-core may persist those selector changes in its existing `cache.db`, just as
-it persists manual choices. There is no periodic configuration/flash rewrite.
-See [measured costs and acceptance results](test/GATEWAY-COST.md).
-
-DIRECT attempts the router's ordinary route. It cannot make a VPN-only service
-reachable when every VPN path is absent. Existing connections need to reconnect.
-For IPv4 source guards, keep endpoint reservations and `BYPASS_SOURCE_CIDRS`
-consistent with the private inventory; automatic discovery is not enabled.
-
-A LAN client running its own VPN usually sends encapsulated traffic to its VPN
-server. These rules classify the outer destination, not the hidden inner
-request, and cannot detect that the client has enabled a VPN. If that VPN
-server itself matches a managed private prefix/domain, its outer connection
-can still use the shared gateway. To exempt a known client from shared private
-routing, add its reserved source IP to `BYPASS_SOURCE_CIDRS` with mode `gateway`;
-ordinary public subscription routing is retained. Guest ingress stays direct.
-
-On an OpenWrt test device, `make gateway-monitor-test` checks status mismatches,
-hysteresis, cached-state reset and cleanup without network or firewall changes.
-For an explicitly authorized transport outage test on the live router:
-
-```sh
-TEST_GATEWAY_IP=192.0.2.10 TEST_GATEWAY_PORT=8022 \
-  sh test/gateway-failover-live.sh
-```
-
-Supply the actual selected endpoint address. This temporarily drops only
-router-originated TCP to that SSH endpoint, checks fresh real DNS during
-fallback, restores transport and checks recovery without a core restart.
-The test cleans up its own firewall chain on exit. Run test helpers explicitly;
-they are not installed or started as part of normal deployment.
+and subscription routing. The selector has no DIRECT fallback.
+Private traffic and private DNS always
+use the selected SSH gateway; if the endpoint or its VPN is unavailable, the
+request fails. No periodic health-check process runs. Static source guards
+continue to prevent endpoint recursion without probing connectivity.
 
 SSH outbounds carry TCP, not arbitrary UDP, ICMP or an entire IP VPN. Kerberos
 clients must be configured to use reachable KDCs over TCP when UDP would
