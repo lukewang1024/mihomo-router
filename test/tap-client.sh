@@ -28,7 +28,11 @@ if [ ! -d /etc/netns ]; then mkdir /etc/netns; owns_parent=1; fi
 mkdir "$dnsdir"; owns_dns=1
 printf 'nameserver %s\n' "$TEST_DNS" >"$dnsdir/resolv.conf"
 "$TAP_RELAY" "/var/run/netns/$ns" "$ht" "$ct" >"$log" 2>&1 & pid=$!
-for attempt in 1 2 3; do grep -q '^READY' "$log" && break; sleep 1; done
+attempt=0
+while [ "$attempt" -lt 3 ]; do
+    grep -q '^READY' "$log" && break
+    attempt=$((attempt+1)); sleep 1
+done
 if ! grep -q '^READY' "$log"; then cat "$log" >&2; exit 1; fi
 brctl addif "$LAN_BRIDGE" "$ht"
 ip link set "$ht" up

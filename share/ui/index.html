@@ -55,6 +55,7 @@
   </section>
   <section id="gateway" class="panel" hidden>
     <h2>内网出口设备</h2>
+    <p id="gateway-summary" class="chain"></p>
     <p class="muted">切换对新连接生效。已有会话需要重新连接。</p>
     <div id="devices" class="devices"></div>
   </section>
@@ -97,6 +98,7 @@
   $('secret').value = token;
   let busy = false;
   let generation = 0;
+  let gatewayAutomatic = false;
   function notice(message, error = false) {
     $('notice').textContent = message;
     $('notice').className = error ? 'notice error' : 'notice';
@@ -149,7 +151,7 @@
     $('subscription-summary').textContent = modeLabel + (root ? ' · ' + (mode === 'rule' ? '默认规则出口：' : '当前出口：') + selectedChain(root, proxies) : ' · 按匹配规则决定出口');
     $('subscription-groups').replaceChildren();
     for (const [name, state] of Object.entries(proxies)) {
-      if (name === group || (name === 'GLOBAL' && mode !== 'global') || !Array.isArray(state.all)) continue;
+      if (name === group || state.hidden || (name === 'GLOBAL' && mode !== 'global') || !Array.isArray(state.all)) continue;
       const card = node('div', undefined, 'device');
       card.append(node('h3', name));
       const manual = state.type === 'Selector';
@@ -176,14 +178,17 @@
     if (!$('subscription-groups').children.length) $('subscription-groups').textContent = '当前没有订阅分组。';
     $('subscription').hidden = false;
   }
-  function renderDevices(state) {
+  function renderDevices(state, effective) {
     $('devices').replaceChildren();
     if (!state) { $('gateway').hidden = true; return; }
+    $('gateway-summary').textContent = effective ?
+      (effective.now === 'DIRECT' ? '当前直连：出口正在检测或暂不可用，将自动重试。' : '出口检查通过，当前通过所选设备访问内网。') :
+      '自动回退未启用。';
     for (const name of state.all || []) {
       const selected = name === state.now;
       const card = node('div', undefined, selected ? 'device selected' : 'device');
       const title = node('strong', name);
-      const badge = node('div', selected ? '当前出口' : '可选择', 'badge');
+      const badge = node('div', selected ? '已选设备' : '可选择', 'badge');
       const button = node('button', selected ? '已选择' : '切换到此设备'); button.type = 'button';
       button.disabled = selected || busy;
       button.addEventListener('click', () => select(group, name));
@@ -214,11 +219,12 @@
       const [data, routes, config, traffic] = await Promise.all([api('/proxies'), api('/rules'), api('/configs'), api('/connections')]);
       if (current !== generation) return;
       const proxies = data.proxies || {};
+      gatewayAutomatic = !!proxies['SSH-Gateway-Route'];
       renderSubscription(proxies, routes.rules || [], config.mode);
-      renderDevices(proxies[group]);
+      renderDevices(proxies[group], proxies['SSH-Gateway-Route']);
       $('routes').replaceChildren();
       for (const rule of routes.rules || []) {
-        if (rule.proxy !== group) continue;
+        if (rule.proxy !== group && rule.proxy !== 'SSH-Gateway-Route') continue;
         $('routes').append(node('li', rule.payload || rule.type));
       }
       if (!$('routes').children.length) $('routes').textContent = '当前没有匹配此出口的规则。';
@@ -226,7 +232,8 @@
       renderTraffic(traffic);
       $('connection').open = false;
       try { if (token) localStorage.setItem(storageKey, token); } catch {}
-      notice('已连接管理服务 · ' + (proxies[group] ? '内网出口：' + (proxies[group].now || '未选择') : '订阅配置已加载'));
+      notice('已连接管理服务 · ' + (proxies[group] ? '内网出口：' +
+        (proxies['SSH-Gateway-Route']?.now === 'DIRECT' ? '直连回退（所选设备：' + proxies[group].now + '）' : (proxies[group].now || '未选择')) : '订阅配置已加载'));
       if (busy) disableControls();
     } catch (error) {
       if (current !== generation) return;
@@ -241,7 +248,10 @@
     disableControls();
     notice('正在切换：' + name + '…');
     let failure;
-    try { await api('/proxies/' + encodeURIComponent(name), { method: 'PUT', body: JSON.stringify({ name: target }) }); }
+    try {
+      if (name === group && gatewayAutomatic) await api('/proxies/SSH-Gateway-Route', { method: 'PUT', body: JSON.stringify({ name: 'DIRECT' }) });
+      await api('/proxies/' + encodeURIComponent(name), { method: 'PUT', body: JSON.stringify({ name: target }) });
+    }
     catch (error) { failure = error; }
     busy = false;
     await refresh();

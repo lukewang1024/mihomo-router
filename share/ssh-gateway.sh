@@ -5,6 +5,13 @@ SSH_GATEWAY_CIDRS=${SSH_GATEWAY_CIDRS:-}
 SSH_GATEWAY_DOMAINS=${SSH_GATEWAY_DOMAINS:-}
 SSH_GATEWAY_DNS=${SSH_GATEWAY_DNS:-}
 SSH_GATEWAY_API_SECRET=${SSH_GATEWAY_API_SECRET:-$CONTROLLER_SECRET}
+SSH_GATEWAY_FAILOVER=${SSH_GATEWAY_FAILOVER:-0}
+SSH_GATEWAY_HEALTH_URL=${SSH_GATEWAY_HEALTH_URL:-}
+SSH_GATEWAY_HEALTH_EXPECTED=${SSH_GATEWAY_HEALTH_EXPECTED:-200-399}
+SSH_GATEWAY_HEALTH_INTERVAL=${SSH_GATEWAY_HEALTH_INTERVAL:-60}
+SSH_GATEWAY_HEALTH_TIMEOUT=${SSH_GATEWAY_HEALTH_TIMEOUT:-3000}
+SSH_GATEWAY_HEALTH_THRESHOLD=${SSH_GATEWAY_HEALTH_THRESHOLD:-2}
+JSONFILTER=${JSONFILTER:-jsonfilter}
 
 gateway_settings() {
     [ "$SSH_GATEWAY_ENABLED" = 1 ] || { log 'SSH_GATEWAY_ENABLED must be 0 or 1'; return 1; }
@@ -29,27 +36,122 @@ gateway_settings() {
         case "$SSH_GATEWAY_DNS" in tcp://*|tls://*|https://*) ;; *) log 'domain routes require TCP/TLS/HTTPS SSH_GATEWAY_DNS'; return 1 ;; esac
         case "$SSH_GATEWAY_DNS" in *'#'*|*' '*|*'	'*) log 'gateway DNS must have no fragment or whitespace'; return 1 ;; esac
     fi
+    case "$SSH_GATEWAY_FAILOVER" in 0|1) ;; *) log 'SSH_GATEWAY_FAILOVER must be 0 or 1'; return 1 ;; esac
+    if [ "$SSH_GATEWAY_FAILOVER" = 1 ]; then
+        case "$SSH_GATEWAY_HEALTH_URL" in http://?*|https://?*) ;; *) log 'configure an internal HTTP(S) health URL'; return 1 ;; esac
+        case "$SSH_GATEWAY_HEALTH_URL" in *'"'*|*"'"*|*\\*|*[[:space:]]*) log 'unsupported health URL quoting/whitespace'; return 1 ;; esac
+        printf '%s\n' "$SSH_GATEWAY_HEALTH_EXPECTED" | awk 'BEGIN{FS="-"} {exit !(NF<=2 && $1~/^[0-9]+$/ && $1>=100 && $1<=599 && (NF==1 || ($2~/^[0-9]+$/ && $2>=$1 && $2<=599)))}' || { log 'invalid health expected status range'; return 1; }
+        for gateway_number in "$SSH_GATEWAY_HEALTH_INTERVAL" "$SSH_GATEWAY_HEALTH_TIMEOUT" "$SSH_GATEWAY_HEALTH_THRESHOLD"; do
+            case "$gateway_number" in ''|0*|*[!0-9]*) log 'health timing/threshold must be positive integers without leading zeroes'; return 1 ;; esac
+            [ "${#gateway_number}" -le 6 ] && [ "$gateway_number" -gt 0 ] || { log 'health timing/threshold out of range'; return 1; }
+        done
+        [ "$SSH_GATEWAY_HEALTH_INTERVAL" -ge 10 ] && [ "$SSH_GATEWAY_HEALTH_TIMEOUT" -le 10000 ] && [ "$SSH_GATEWAY_HEALTH_THRESHOLD" -le 10 ] || { log 'health interval >=10s, timeout <=10000ms and threshold <=10 required'; return 1; }
+        command -v "$JSONFILTER" >/dev/null 2>&1 || { log 'automatic gateway fallback requires jsonfilter'; return 1; }
+    fi
 }
 
-gateway_api() (
-    ensure_dirs
+gateway_request() (
+    gateway_path=$1
+    shift
     # Keep API authentication out of process arguments and inherited proxies.
-    gateway_curl_config=$(mktemp "$RUN_DIR/gateway-curl.XXXXXX") || return 1
-    trap 'rm -f "$gateway_curl_config"' 0
+    gateway_curl_config=${gateway_monitor_auth:-}
+    gateway_owns_auth=0
+    if [ -z "$gateway_curl_config" ]; then
+        ensure_dirs
+        gateway_curl_config=$(mktemp "$RUN_DIR/gateway-curl.XXXXXX") || return 1
+        gateway_owns_auth=1
+        chmod 600 "$gateway_curl_config"
+    fi
+    trap '[ "$gateway_owns_auth" = 0 ] || rm -f "$gateway_curl_config"' 0
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    chmod 600 "$gateway_curl_config"
     case "$SSH_GATEWAY_API_SECRET" in *'"'*|*\\*|*'
 '*|*"$(printf '\r')"*) rm -f "$gateway_curl_config"; die 'invalid API secret' ;; esac
-    if [ -n "$SSH_GATEWAY_API_SECRET" ]; then
+    if [ "$gateway_owns_auth" = 1 ] && [ -n "$SSH_GATEWAY_API_SECRET" ]; then
         printf 'header = "Authorization: Bearer %s"\n' "$SSH_GATEWAY_API_SECRET" >"$gateway_curl_config"
     fi
-    "$CURL" --config "$gateway_curl_config" --noproxy '*' -fsS --connect-timeout 3 --max-time 10 "$@" \
-        "http://$CONTROLLER_ADDRESS/proxies/SSH-Gateway"
+    "$CURL" --config "$gateway_curl_config" --noproxy '*' -fsS --connect-timeout 2 --max-time "${gateway_request_timeout:-12}" "$@" \
+        "http://$CONTROLLER_ADDRESS$gateway_path"
     gateway_api_rc=$?
-    rm -f "$gateway_curl_config"
     return "$gateway_api_rc"
 )
+
+gateway_api() { gateway_request /proxies/SSH-Gateway "$@"; }
+
+gateway_reset_route() {
+    gateway_request /proxies/SSH-Gateway-Route -X PUT -H 'Content-Type: application/json' --data '{"name":"DIRECT"}'
+}
+
+# Reset any cached healthy state before enabling LAN ingress on startup.
+gateway_prepare_failover() {
+    gateway_prepare_attempt=0
+    while [ "$gateway_prepare_attempt" -lt 5 ]; do
+        gateway_request_timeout=3 gateway_reset_route >/dev/null 2>&1 && return 0
+        gateway_prepare_attempt=$((gateway_prepare_attempt+1)); sleep 1
+    done
+    log 'cannot initialize safe DIRECT route; check controller authentication'
+    return 1
+}
+
+# One probe of the selected device per interval, never a process per connection.
+# Keep the user's device selector separate from the effective route (and DNS).
+gateway_monitor() {
+    gateway_core_pid=$1
+    gateway_request_timeout=$((SSH_GATEWAY_HEALTH_TIMEOUT/1000+2))
+    umask 077
+    gateway_monitor_auth=$(mktemp "$RUN_DIR/gateway-monitor.XXXXXX") || exit 1
+    gateway_sample=$gateway_monitor_auth.json
+    gateway_sleep_pid=
+    trap 'if [ -n "$gateway_sleep_pid" ]; then kill "$gateway_sleep_pid" 2>/dev/null || :; fi; rm -f "$gateway_monitor_auth" "$gateway_sample" "$RUN_DIR/gateway-monitor.pid"' 0
+    trap 'exit 0' INT TERM
+    printf 'header = "Authorization: Bearer %s"\n' "$SSH_GATEWAY_API_SECRET" >"$gateway_monitor_auth"
+    gateway_good=0; gateway_bad=0; gateway_device=; gateway_effective=
+    while kill -0 "$gateway_core_pid" 2>/dev/null; do
+        if gateway_request /proxies/SSH-Gateway-Route -o "$gateway_sample" 2>/dev/null; then
+            gateway_effective=$("$JSONFILTER" -i "$gateway_sample" -e '@.now')
+            # Start safely even if the core restored a previously healthy route.
+            if [ -z "$gateway_device" ] && [ "$gateway_effective" != DIRECT ]; then
+                gateway_reset_route >/dev/null 2>&1 && gateway_effective=DIRECT
+            fi
+            gateway_before=
+            if gateway_api -o "$gateway_sample" 2>/dev/null; then
+                gateway_before=$("$JSONFILTER" -i "$gateway_sample" -e '@.now')
+            fi
+            gateway_ok=0
+            if [ -n "$gateway_before" ] && gateway_request /proxies/SSH-Gateway/delay -G \
+                --data-urlencode "url=$SSH_GATEWAY_HEALTH_URL" --data-urlencode "timeout=$SSH_GATEWAY_HEALTH_TIMEOUT" \
+                --data-urlencode "expected=$SSH_GATEWAY_HEALTH_EXPECTED" -o /dev/null 2>/dev/null; then
+                if gateway_api -o "$gateway_sample" 2>/dev/null; then
+                    gateway_after=$("$JSONFILTER" -i "$gateway_sample" -e '@.now')
+                    # v1.19.28 delay API can return 200 on a status mismatch;
+                    # the URL-specific alive flag contains the actual verdict.
+                    gateway_alive=$("$JSONFILTER" -i "$gateway_sample" -e "@.extra[\"$SSH_GATEWAY_HEALTH_URL\"].alive")
+                    [ "$gateway_before" != "$gateway_after" ] || [ "$gateway_alive" != true ] || gateway_ok=1
+                fi
+            fi
+            if [ "$gateway_device" != "$gateway_before" ]; then
+                gateway_good=0; gateway_bad=0; gateway_device=$gateway_before
+                # A newly selected device must earn its healthy state.
+                if [ "$gateway_effective" != DIRECT ]; then
+                    gateway_reset_route >/dev/null 2>&1 && gateway_effective=DIRECT
+                fi
+            fi
+            if [ "$gateway_ok" = 1 ]; then gateway_good=$((gateway_good+1)); gateway_bad=0
+            else gateway_bad=$((gateway_bad+1)); gateway_good=0; fi
+            gateway_want=$gateway_effective
+            [ "$gateway_good" -lt "$SSH_GATEWAY_HEALTH_THRESHOLD" ] || { gateway_good=$SSH_GATEWAY_HEALTH_THRESHOLD; gateway_want=SSH-Gateway; }
+            [ "$gateway_bad" -lt "$SSH_GATEWAY_HEALTH_THRESHOLD" ] || { gateway_bad=$SSH_GATEWAY_HEALTH_THRESHOLD; gateway_want=DIRECT; }
+            if [ "$gateway_want" != "$gateway_effective" ]; then
+                if gateway_request /proxies/SSH-Gateway-Route -X PUT -H 'Content-Type: application/json' --data "{\"name\":\"$gateway_want\"}" >/dev/null 2>&1; then
+                    log "gateway effective route: $gateway_want (consecutive health results reached threshold)"
+                fi
+            fi
+        fi
+        sleep "$SSH_GATEWAY_HEALTH_INTERVAL" & gateway_sleep_pid=$!
+        wait "$gateway_sleep_pid" || :
+        gateway_sleep_pid=
+    done
+}
 
 gateway_command() {
     case ${1:-} in
@@ -68,11 +170,18 @@ gateway_command() {
             [ "$SSH_GATEWAY_ENABLED" = 1 ] || { printf '%s\n' 'SSH gateway disabled'; return; }
             gateway_api || die 'gateway API unavailable; verify running config and API secret'
             printf '\n'
+            if [ "$SSH_GATEWAY_FAILOVER" = 1 ]; then
+                gateway_request /proxies/SSH-Gateway-Route || die 'effective gateway route unavailable'
+                printf '\n'
+            fi
             ;;
         use)
             [ "$#" -eq 2 ] || die 'gateway use requires a device name'
             [ "$SSH_GATEWAY_ENABLED" = 1 ] || die 'SSH gateway is disabled'
             case $2 in ''|-*|*[!a-zA-Z0-9_.-]*) die 'use simple device names: letters, numbers, dot, underscore, dash' ;; esac
+            if [ "$SSH_GATEWAY_FAILOVER" = 1 ]; then
+                gateway_reset_route || die 'cannot reset effective gateway route'
+            fi
             # Mihomo validates group membership and persists selection in cache.db.
             gateway_api -X PUT -H 'Content-Type: application/json' --data "{\"name\":\"$2\"}" || die 'gateway selection request failed; inspect gateway status'
             printf 'SSH gateway selected: %s\n' "$2"

@@ -108,6 +108,7 @@ die() {
 # Shared optional SSH gateway support; no device addresses or keys live here.
 # shellcheck source=share/ssh-gateway.sh
 . "$SCRIPT_DIR/../share/ssh-gateway.sh"
+# shellcheck source=share/panel.sh
 . "$SCRIPT_DIR/../share/panel.sh"
 
 ensure_dirs() {
@@ -334,7 +335,7 @@ normalize_gateway_config() {
     normalize_policy_config "$1" "$2.policy" || { rm -f "$2.policy"; return 1; }
     awk -v devices="$SSH_GATEWAY_FILE" -v cidrs="$SSH_GATEWAY_CIDRS" \
         -v domains="$SSH_GATEWAY_DOMAINS" -v resolver="$SSH_GATEWAY_DNS" \
-        -v api_secret="$SSH_GATEWAY_API_SECRET" -v bypass_sources="$gateway_bypass_sources" \
+        -v api_secret="$SSH_GATEWAY_API_SECRET" -v bypass_sources="$gateway_bypass_sources" -v failover="$SSH_GATEWAY_FAILOVER" \
         -f "$SCRIPT_DIR/../share/ssh-gateway-overlay.awk" "$2.policy" >"$2"
     gateway_rc=$?
     rm -f "$2.policy"
@@ -561,6 +562,11 @@ wait_for_tun() {
 
 cleanup_managed() {
 	trap - INT TERM EXIT
+	if [ -n "${gateway_monitor_pid:-}" ]; then
+		kill "$gateway_monitor_pid" >/dev/null 2>&1 || :
+		wait "$gateway_monitor_pid" >/dev/null 2>&1 || :
+		gateway_monitor_pid=
+	fi
 	if [ -n "${core_pid:-}" ]; then
 		kill "$core_pid" >/dev/null 2>&1 || :
 		cleanup_count=0
@@ -596,8 +602,16 @@ run_managed() {
 	core_pid=$!
 	echo $$ >"$PID_FILE"
 	wait_for_tun || die "TUN device $TUN_DEVICE did not appear"
+	if [ "$SSH_GATEWAY_ENABLED" = 1 ] && [ "$SSH_GATEWAY_FAILOVER" = 1 ]; then
+		gateway_prepare_failover || die "cannot initialize automatic gateway fallback"
+	fi
 	firewall_up
 	: >"$READY_FILE"
+	if [ "$SSH_GATEWAY_ENABLED" = 1 ] && [ "$SSH_GATEWAY_FAILOVER" = 1 ]; then
+		gateway_monitor "$core_pid" &
+		gateway_monitor_pid=$!
+		printf '%s\n' "$gateway_monitor_pid" >"$RUN_DIR/gateway-monitor.pid"
+	fi
 	wait "$core_pid"
 	run_status=$?
 	cleanup_managed

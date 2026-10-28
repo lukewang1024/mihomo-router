@@ -77,6 +77,14 @@ AD_RULES_PROXY=DIRECT
 
 # Optional SSH network gateway. Device inventory/keys stay private on the router.
 # Run `mihomo-router gateway init`, then fill gateways/proxies.yaml.
+SSH_GATEWAY_FAILOVER=0
+# A small, stable internal HTTP(S) endpoint; public URLs cannot test VPN health.
+# HEAD requests must return the configured status. Redirects are not followed.
+SSH_GATEWAY_HEALTH_URL=
+SSH_GATEWAY_HEALTH_EXPECTED=200-399
+SSH_GATEWAY_HEALTH_INTERVAL=60
+SSH_GATEWAY_HEALTH_TIMEOUT=3000
+SSH_GATEWAY_HEALTH_THRESHOLD=2
 SSH_GATEWAY_ENABLED=0
 # Explicit remote prefixes only; local LAN destinations remain bypassed.
 SSH_GATEWAY_CIDRS=""

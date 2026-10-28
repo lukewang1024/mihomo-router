@@ -18,6 +18,13 @@ function group(n) {
     print pad(n+2) "disable-udp: true"
     print pad(n+2) "use:"
     print pad(n+4) "- mr-ssh-gateways"
+    if(failover==1) {
+        print pad(n) "- name: SSH-Gateway-Route"
+        print pad(n+2) "type: select"
+        print pad(n+2) "hidden: true"
+        print pad(n+2) "disable-udp: true"
+        print pad(n+2) "proxies: [DIRECT, SSH-Gateway]"
+    }
 }
 function routes(n, j, k) {
     # The source endpoint must never dial its own SSH outbound. Match exactly
@@ -26,11 +33,11 @@ function routes(n, j, k) {
         for(j=1;j<=domain_count;j++) print pad(n) "- AND,((SRC-IP-CIDR," source[k] "),(DOMAIN-SUFFIX," domain[j] ")),DIRECT"
         for(j=1;j<=cidr_count;j++) print pad(n) "- AND,((SRC-IP-CIDR," source[k] "),(IP-CIDR," cidr[j] ",no-resolve)),DIRECT"
     }
-    for(j=1;j<=domain_count;j++) print pad(n) "- DOMAIN-SUFFIX," domain[j] ",SSH-Gateway"
-    for(j=1;j<=cidr_count;j++) print pad(n) "- IP-CIDR," cidr[j] ",SSH-Gateway,no-resolve"
+    for(j=1;j<=domain_count;j++) print pad(n) "- DOMAIN-SUFFIX," domain[j] "," route_group
+    for(j=1;j<=cidr_count;j++) print pad(n) "- IP-CIDR," cidr[j] "," route_group ",no-resolve"
 }
 function policies(n, j) {
-    for(j=1;j<=domain_count;j++) print pad(n) "\047+." domain[j] "\047: \047" resolver "#SSH-Gateway\047"
+    for(j=1;j<=domain_count;j++) print pad(n) "\047+." domain[j] "\047: \047" resolver "#" route_group "\047"
 }
 function dns_section(start, stop, base, j, key, value, end, n, have_policy) {
     base=child_indent(start,stop)
@@ -53,9 +60,10 @@ END {
     if(bad) exit 1
     domain_count=split(domains,domain," "); cidr_count=split(cidrs,cidr," ")
     source_count=split(bypass_sources,source," ")
+    route_group=(failover==1 ? "SSH-Gateway-Route" : "SSH-Gateway")
     for(i=1;i<=NR;i++) {
         if(line[i] ~ /^[ ]*[\047\042]?mr-ssh-gateways[\047\042]?:/ ||
-           line[i] ~ /^[ ]*-[ ]*name:[ ]*[\047\042]?SSH-Gateway[\047\042]?[ ]*(#.*)?$/)
+           line[i] ~ /^[ ]*-[ ]*name:[ ]*[\047\042]?SSH-Gateway(-Route)?[\047\042]?[ ]*(#.*)?$/)
             fail("reserved provider/group already exists")
         if(line[i] ~ /^mode:/ && line[i] !~ /^mode:[ ]*[\047\042]?rule[\047\042]?[ ]*(#.*)?$/)
             fail("SSH target routing requires rule mode")
