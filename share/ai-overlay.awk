@@ -40,7 +40,7 @@ END {
             if((section=="proxies" || section=="proxy-groups") && s~/[ {,-]name:/) {
                 name=name_of(s)
                 if(name==group) fail("AI group already exists; use an unmodified subscription")
-                if(section=="proxies" && name~include && (exclude=="" || name!~exclude)) nodes[++nn]=name
+                if(section=="proxies" && name~node_include && (exclude=="" || name!~exclude)) nodes[++nn]=name
             }
         }
         if(seen["proxies"]!=1 || seen["proxy-groups"]!=1 || seen["rules"]!=1) fail("missing or repeated subscription sections")

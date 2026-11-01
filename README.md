@@ -78,6 +78,29 @@ prove domain routing and DNS work. Verify reboot behavior during a planned
 maintenance window. DNS or endpoint changes should remain machine-local; they
 do not require adding an organization preset to the installer.
 
+## Optional Tailscale management access
+
+Tailscale is installed and registered separately from mihomo-router. The first
+command installs the pinned ARM64 client, enables its procd service, and adds a
+persistent Xiaomi startup include. It does not sign the router into a Tailnet:
+
+    ./bin/mihomo-router-deploy tailscale-install --host xiaomi-r6500
+
+When ready, start device registration:
+
+    ./bin/mihomo-router-deploy tailscale-register --host xiaomi-r6500
+
+Open the one-time URL printed by Tailscale and approve the device, then run the
+registration command again. After registration, it exposes the router's
+existing SSH service on Tailnet-only TCP port 2222 using Tailscale Serve.
+tailscale-status reports the current device state.
+
+The bundled 1.104.1-ax3600-minimal ARM64 client runs in userspace networking
+mode. Registration explicitly declines Tailnet DNS and route acceptance and
+does not enable Tailscale SSH or advertise subnet/exit-node routes. The
+router's private node state remains on the device and is never copied from
+another router. See the Tailscale add-on details in contrib/tailscale/README.md.
+
 ## Commands
 
 ```sh
@@ -403,8 +426,10 @@ Check the selected resolver through the gateway endpoint itself. A VPN may
 return DNS SERVFAIL for plain TCP port 53 even when HTTPS works. In that case,
 use a reachable DNS-over-HTTPS resolver, for example
 `SSH_GATEWAY_DNS=https://dns.alidns.com/dns-query`, if it answers the required
-names correctly. Public DNS is suitable only for names published there; private
-DNS zones still require the endpoint's reachable internal resolver.
+names correctly. By default, these DNS requests use the selected gateway. Set
+`SSH_GATEWAY_DNS_PROXY=DIRECT` to send them to a public resolver through the
+router's WAN instead. Public DNS is suitable only for names published there;
+private DNS zones still require a reachable internal resolver.
 
 Validate before activation, then restart once to load the inventory/group/rules:
 
@@ -544,9 +569,11 @@ exhaust the core's file descriptors and router memory, affecting wireless
 operation too. Increasing the file descriptor limit is not a loop fix.
 
 For a phone that must also use the router's public proxy, set
-`BYPASS_SOURCE_MODE=gateway` (requires the SSH gateway). Endpoint port-53
-queries and configured private gateway destination prefixes bypass capture;
-other public/Fake-IP traffic still uses subscription routing. Source-aware
+`BYPASS_SOURCE_MODE=gateway` (requires the SSH gateway). Configured private
+gateway destination prefixes bypass capture; endpoint DNS behavior is controlled
+by `BYPASS_SOURCE_DNS_MODE`. Set it to `mihomo` to capture port 53 for Fake-IP
+and domain rules while public DNS servers use DIRECT, or `router` to keep the
+router's normal DNS forwarder. Other public/Fake-IP traffic still uses subscription routing. Source-aware
 DIRECT rules precede the SSH gateway's domain/prefix rules so the endpoint's
 forwarded connections can never select its own SSH outbound. This includes
 public-address domains matching the gateway policy, not just private prefixes.

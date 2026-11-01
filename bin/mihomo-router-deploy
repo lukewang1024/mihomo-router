@@ -22,6 +22,9 @@ usage:
   mihomo-router-deploy status --host HOST
   mihomo-router-deploy gateway --host HOST init|check|status
   mihomo-router-deploy gateway --host HOST use DEVICE
+  mihomo-router-deploy tailscale-install --host HOST
+  mihomo-router-deploy tailscale-register --host HOST
+  mihomo-router-deploy tailscale-status --host HOST
 
 Environment:
   MIHOMO_ROUTER_HOST    SSH host, required unless --host is supplied
@@ -126,6 +129,37 @@ mv "$tmp" "$config"
 REMOTE_SCRIPT
 }
 
+upload_tailscale() {
+	tailscale_dir=$SOURCE_DIR/contrib/tailscale
+	[ -r "$tailscale_dir/install.sh" ] || die "missing Tailscale installer"
+	[ -r "$tailscale_dir/tailscaled-1.104.1-ax3600-minimal-arm64.xz" ] || die "missing pinned Tailscale archive"
+	[ -r "$tailscale_dir/tailscaled-1.104.1-ax3600-minimal-arm64.xz.sha256" ] || die "missing archive checksum"
+	[ -r "$tailscale_dir/tailscaled.sha256" ] || die "missing binary checksum"
+	[ -r "$tailscale_dir/tailscale-control.sh" ] || die "missing Tailscale controller"
+	"$DEPLOY_SSH" "$ROUTER_HOST" 'mkdir -p /tmp/mihomo-router-tailscale-upload; chmod 700 /tmp/mihomo-router-tailscale-upload'
+	scp -O \
+		"$tailscale_dir/install.sh" \
+		"$tailscale_dir/tailscaled-1.104.1-ax3600-minimal-arm64.xz" \
+		"$tailscale_dir/tailscaled-1.104.1-ax3600-minimal-arm64.xz.sha256" \
+		"$tailscale_dir/tailscaled.sha256" \
+		"$tailscale_dir/tailscale-control.sh" \
+		"$tailscale_dir/bin/boot-run.sh" \
+		"$tailscale_dir/bin/run.sh" \
+		"$tailscale_dir/bin/boot-include" \
+		"$tailscale_dir/openwrt/tailscale-wol.init" \
+		"$ROUTER_HOST:/tmp/mihomo-router-tailscale-upload/"
+	"$DEPLOY_SSH" "$ROUTER_HOST" '
+		set -eu
+		stage=/tmp/mihomo-router-tailscale-upload
+		trap '\''rm -rf "$stage"'\'' 0
+		mkdir -p "$stage/bin" "$stage/openwrt"
+		mv "$stage/boot-run.sh" "$stage/run.sh" "$stage/boot-include" "$stage/bin/"
+		mv "$stage/tailscale-wol.init" "$stage/openwrt/"
+		sh "$stage/install.sh"
+	'
+	printf '%s\n' "Tailscale client installed on $ROUTER_HOST; registration remains a separate step."
+}
+
 bootstrap_router() {
 	[ -n "$SUBSCRIPTION_URL" ] || die "bootstrap requires --subscription-url or --subscription-stdin"
 	upload_runtime
@@ -206,6 +240,9 @@ case "$command_name" in
 	upgrade) upgrade_router ;;
 	restart) "$DEPLOY_SSH" "$ROUTER_HOST" '/data/mihomo-router/bin/mihomo-router-boot restart' ;;
 	status) "$DEPLOY_SSH" "$ROUTER_HOST" '/data/mihomo-router/bin/mihomo-router status' ;;
+	tailscale-install) upload_tailscale ;;
+	tailscale-register) "$DEPLOY_SSH" "$ROUTER_HOST" '/data/tailscale-wol/tailscale-control.sh register' ;;
+	tailscale-status) "$DEPLOY_SSH" "$ROUTER_HOST" '/data/tailscale-wol/tailscale-control.sh status' ;;
 	gateway)
 		case ${1:-} in
 			init|check|status)

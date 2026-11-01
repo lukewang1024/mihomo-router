@@ -30,7 +30,7 @@ function routes(n, j, k) {
     for(j=1;j<=cidr_count;j++) print pad(n) "- IP-CIDR," cidr[j] ",SSH-Gateway,no-resolve"
 }
 function policies(n, j) {
-    for(j=1;j<=domain_count;j++) print pad(n) "\047+." domain[j] "\047: \047" resolver "#SSH-Gateway\047"
+    for(j=1;j<=domain_count;j++) print pad(n) "\047+." domain[j] "\047: \047" resolver "#" dns_proxy "\047"
 }
 function dns_section(start, stop, base, j, key, value, end, n, have_policy) {
     base=child_indent(start,stop)

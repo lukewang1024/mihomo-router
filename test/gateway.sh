@@ -50,6 +50,10 @@ has '^  store-selected: true$' "$render"
 has '^  - IP-CIDR,10.42.0.0/16,SSH-Gateway,no-resolve$' "$render"
 has '^  - DOMAIN-SUFFIX,internal.example,SSH-Gateway$' "$render"
 has "'+.internal.example': 'tcp://10.42.0.53:53#SSH-Gateway'" "$render"
+printf '%s\n' 'SSH_GATEWAY_DNS_PROXY=DIRECT' >>"$MIHOMO_ROUTER_CONFIG"
+"$controller" render "$fixture" "$render"
+has "'+.internal.example': 'tcp://10.42.0.53:53#DIRECT'" "$render"
+printf '%s\n' 'SSH_GATEWAY_DNS_PROXY=SSH-Gateway' >>"$MIHOMO_ROUTER_CONFIG"
 has '^log-level: warning$' "$render"
 has "^external-ui: '$PROJECT_DIR/share/ui'$" "$render"
 has "^secret: 'fixture-token'$" "$render"
@@ -122,6 +126,11 @@ if grep -q -- '-s 192.168.31.50/32 -j RETURN' "$MOCK_LOG"; then fail 'scoped mod
 has 'AND,((SRC-IP-CIDR,192.168.31.50/32),(DOMAIN-SUFFIX,internal.example)),DIRECT' "$render"
 has 'AND,((SRC-IP-CIDR,192.168.31.51/32),(IP-CIDR,10.42.0.0/16,no-resolve)),DIRECT' "$render"
 awk '/AND,.*internal.example/ {a=NR} /DOMAIN-SUFFIX,internal.example,SSH-Gateway/ {b=NR} END {exit !(a && a<b)}' "$render" || fail 'source guard must precede gateway routes'
+printf '%s\n' 'BYPASS_SOURCE_DNS_MODE=mihomo' >>"$MIHOMO_ROUTER_CONFIG"
+: >"$MOCK_LOG"
+"$controller" firewall-up
+has 'nat -A MR_INGRESS -s 192.168.31.0/24 -p udp --dport 53 -j REDIRECT --to-ports 1053' "$MOCK_LOG"
+if grep -q -- '-A MR_INGRESS -s 192.168.31.50/32 -p udp --dport 53 -j RETURN' "$MOCK_LOG"; then fail 'mihomo DNS mode bypassed endpoint DNS'; fi
 printf '%s\n' 'BYPASS_SOURCE_MODE=invalid' >>"$MIHOMO_ROUTER_CONFIG"
 : >"$MOCK_LOG"
 "$controller" firewall-up >/dev/null 2>&1 && fail 'invalid bypass mode accepted'

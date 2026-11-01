@@ -67,10 +67,12 @@ SSH_GATEWAY_ENABLED=1
 SSH_GATEWAY_CIDRS='10.42.0.0/16'
 SSH_GATEWAY_DOMAINS='internal.example'
 SSH_GATEWAY_DNS='tcp://10.42.0.53:53'
+SSH_GATEWAY_DNS_PROXY=SSH-Gateway
 
 # List all endpoint source addresses so switching devices remains loop-safe.
 BYPASS_SOURCE_CIDRS='192.168.50.100/32'
 BYPASS_SOURCE_MODE=gateway
+BYPASS_SOURCE_DNS_MODE=mihomo
 
 # Optional LAN dashboard: replace the address and private random token.
 CONTROLLER_ADDRESS='192.168.50.1:19090'
@@ -82,13 +84,13 @@ PANEL_ALLOWED_CIDRS='192.168.50.0/24'
 
 Use precise target prefixes instead of classifying entire large address ranges as internal. List required domain suffixes explicitly as well: relying only on the eventual resolved IP can let Fake-IP traffic match other rules first.
 
-Domain DNS uses the same SSH gateway. Choose TCP DNS, DNS-over-TLS or DNS-over-HTTPS that the endpoint can reach. SSH outbounds do not carry ordinary UDP DNS. A public resolver is suitable only when it actually answers the required names; private zones require a reachable internal resolver.
+Domain DNS uses the SSH gateway by default. Set `SSH_GATEWAY_DNS_PROXY=DIRECT` to query a public resolver from the router's ordinary WAN path instead of sending DNS through the endpoint. This setting accepts `SSH-Gateway` or `DIRECT`. Choose TCP DNS, DNS-over-TLS or DNS-over-HTTPS that can answer the configured names; public DNS works only for publicly published names, while private zones need a reachable internal resolver.
 
 `BYPASS_SOURCE_MODE=gateway` has these effects:
 
 - Ordinary main-LAN clients use the selected SSH gateway for configured internal targets.
 - An endpoint's own traffic to those targets follows its own network path instead of returning to its SSH outbound.
-- Endpoint port-53 queries bypass main-LAN DNS interception. Its ordinary public traffic still follows subscription proxy rules.
+- Endpoint DNS follows `BYPASS_SOURCE_DNS_MODE`: `router` bypasses Mihomo DNS interception and uses the router's normal DNS forwarder; `mihomo` captures port 53 for Fake-IP/domain rules. Its ordinary public traffic still follows subscription proxy rules.
 
 `BYPASS_SOURCE_MODE=all` remains the legacy default for compatibility. It also excludes the endpoint's public traffic from transparent proxying. Explicitly use `gateway` when the endpoint still needs the router's public proxy.
 

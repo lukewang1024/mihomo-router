@@ -31,9 +31,12 @@ BYPASS_CIDRS="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.
 # Example only: BYPASS_SOURCE_CIDRS="192.168.31.50/32"
 BYPASS_SOURCE_CIDRS=""
 # all bypasses the endpoint entirely (legacy default). gateway bypasses only
-# endpoint DNS/private gateway prefixes, and renders source-aware DIRECT
+# the endpoint's configured gateway prefixes and renders source-aware DIRECT
 # exceptions for gateway domains. Public traffic retains subscription routing.
 BYPASS_SOURCE_MODE=all
+# router leaves endpoint port-53 queries on dnsmasq; mihomo captures them for
+# Fake-IP/domain rules while DNS upstream requests use Mihomo's resolver policy.
+BYPASS_SOURCE_DNS_MODE=router
 CN_IPSET=cn_ip
 
 MIXED_PORT=7890
@@ -86,6 +89,8 @@ SSH_GATEWAY_DOMAINS=""
 # where plain TCP DNS fails, e.g. https://dns.alidns.com/dns-query.
 # Private-only DNS zones require their own reachable internal resolver.
 SSH_GATEWAY_DNS=
+# Choose DIRECT for public DNS that should not use the endpoint. Default: SSH-Gateway.
+SSH_GATEWAY_DNS_PROXY=SSH-Gateway
 # Optional controller secret override, shared by runtime config and switch command.
 SSH_GATEWAY_API_SECRET=
 

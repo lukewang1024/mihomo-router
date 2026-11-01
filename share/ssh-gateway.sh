@@ -4,6 +4,7 @@ SSH_GATEWAY_FILE=${SSH_GATEWAY_FILE:-$DATA_DIR/gateways/proxies.yaml}
 SSH_GATEWAY_CIDRS=${SSH_GATEWAY_CIDRS:-}
 SSH_GATEWAY_DOMAINS=${SSH_GATEWAY_DOMAINS:-}
 SSH_GATEWAY_DNS=${SSH_GATEWAY_DNS:-}
+SSH_GATEWAY_DNS_PROXY=${SSH_GATEWAY_DNS_PROXY:-SSH-Gateway}
 SSH_GATEWAY_API_SECRET=${SSH_GATEWAY_API_SECRET:-$CONTROLLER_SECRET}
 
 gateway_settings() {
@@ -21,6 +22,7 @@ gateway_settings() {
             for (j=1;j<=4;j++) if (a[j]!~/^[0-9]+$/ || a[j]>255) exit 1
         }}' || { log 'gateway CIDRs must be IPv4 prefixes'; return 1; }
     case "$SSH_GATEWAY_DOMAINS" in *[!a-zA-Z0-9.\ -]*) log 'invalid gateway domain suffix'; return 1 ;; esac
+    case "$SSH_GATEWAY_DNS_PROXY" in SSH-Gateway|DIRECT) ;; *) log 'SSH_GATEWAY_DNS_PROXY must be SSH-Gateway or DIRECT'; return 1 ;; esac
     for gateway_domain in $SSH_GATEWAY_DOMAINS; do
         case "$gateway_domain" in .*|*.|*..*|-*) log 'invalid gateway domain suffix'; return 1 ;; esac
     done
