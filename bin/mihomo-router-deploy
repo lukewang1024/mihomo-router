@@ -20,7 +20,7 @@ usage:
   mihomo-router-deploy upgrade --host HOST
   mihomo-router-deploy restart --host HOST
   mihomo-router-deploy status --host HOST
-  mihomo-router-deploy gateway --host HOST init|check|status
+  mihomo-router-deploy gateway --host HOST init|check|status|list-json|remove ALIAS
   mihomo-router-deploy gateway --host HOST use DEVICE
   mihomo-router-deploy tailscale-install --host HOST
   mihomo-router-deploy tailscale-register --host HOST
@@ -84,7 +84,9 @@ upload_runtime() {
 		"$SOURCE_DIR/share/domestic-overlay.awk" \
 		"$SOURCE_DIR/share/ui/index.html" \
 		"$SOURCE_DIR/share/ssh-gateway.sh" \
+		"$SOURCE_DIR/share/cgi-bin/gateway-admin" \
 		"$SOURCE_DIR/share/ssh-gateway-overlay.awk" \
+		"$SOURCE_DIR/openwrt/mihomo-router-admin.init" \
 		"$SOURCE_DIR/etc/ssh-gateways.yaml.example" \
 		"$SOURCE_DIR/openwrt/mihomo-router.init" \
 		"$SOURCE_DIR/etc/mihomo-router.conf.example" \
@@ -95,8 +97,10 @@ upload_runtime() {
 	"$DEPLOY_SSH" "$ROUTER_HOST" '
 		set -eu
 		stage=/tmp/mihomo-router-upload
-		mkdir -p "$stage/bin" "$stage/share/ui" "$stage/openwrt" "$stage/etc"
+		mkdir -p "$stage/bin" "$stage/share/ui" "$stage/share/cgi-bin" "$stage/openwrt" "$stage/etc"
 		mv "$stage/index.html" "$stage/share/ui/index.html"
+		mv "$stage/gateway-admin" "$stage/share/cgi-bin/gateway-admin"
+		mv "$stage/mihomo-router-admin.init" "$stage/openwrt/mihomo-router-admin.init"
 		mv "$stage/mihomo-router" "$stage/mihomo-router-boot" "$stage/mihomo-router-boot-include" "$stage/bin/"
 		mv "$stage/ai-overlay.awk" "$stage/panel.sh" "$stage/domestic-overlay.awk" "$stage/ssh-gateway.sh" "$stage/ssh-gateway-overlay.awk" "$stage/share/"
 		mv "$stage/ssh-gateways.yaml.example" "$stage/etc/"
@@ -245,16 +249,21 @@ case "$command_name" in
 	tailscale-status) "$DEPLOY_SSH" "$ROUTER_HOST" '/data/tailscale-wol/tailscale-control.sh status' ;;
 	gateway)
 		case ${1:-} in
-			init|check|status)
+			init|check|status|list-json)
 				[ "$#" -eq 1 ] || die "gateway action takes no extra arguments"
 				"$DEPLOY_SSH" "$ROUTER_HOST" "/data/mihomo-router/bin/mihomo-router gateway $1"
 				;;
+			remove)
+				[ "$#" -eq 2 ] || die "gateway remove requires an alias"
+				case $2 in ''|-*|*[!a-zA-Z0-9_.\ -]*) die "invalid gateway device name" ;; esac
+				"$DEPLOY_SSH" "$ROUTER_HOST" "/data/mihomo-router/bin/mihomo-router gateway remove '$2'"
+				;;
 			use)
 				[ "$#" -eq 2 ] || die "gateway use requires a device name"
-				case $2 in ''|-*|*[!a-zA-Z0-9_.-]*) die "invalid gateway device name" ;; esac
-				"$DEPLOY_SSH" "$ROUTER_HOST" "/data/mihomo-router/bin/mihomo-router gateway use $2"
+				case $2 in ''|-*|*[!a-zA-Z0-9_.\ -]*) die "invalid gateway device name" ;; esac
+				"$DEPLOY_SSH" "$ROUTER_HOST" "/data/mihomo-router/bin/mihomo-router gateway use '$2'"
 				;;
-			*) die "gateway requires init, check, status or use DEVICE" ;;
+			*) die "gateway requires init, check, status, list-json, use DEVICE or remove ALIAS" ;;
 		esac
 		;;
 	*) usage >&2; exit 2 ;;

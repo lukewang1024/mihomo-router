@@ -69,8 +69,9 @@ SSH_GATEWAY_DOMAINS='internal.example'
 SSH_GATEWAY_DNS='tcp://10.42.0.53:53'
 SSH_GATEWAY_DNS_PROXY=SSH-Gateway
 
-# List all endpoint source addresses so switching devices remains loop-safe.
-BYPASS_SOURCE_CIDRS='192.168.50.100/32'
+# Optional client exemptions. IPv4 addresses in the endpoint inventory are
+# included automatically and follow device additions/removals.
+BYPASS_SOURCE_CIDRS=''
 BYPASS_SOURCE_MODE=gateway
 BYPASS_SOURCE_DNS_MODE=mihomo
 
@@ -85,6 +86,12 @@ PANEL_ALLOWED_CIDRS='192.168.50.0/24'
 Use precise target prefixes instead of classifying entire large address ranges as internal. List required domain suffixes explicitly as well: relying only on the eventual resolved IP can let Fake-IP traffic match other rules first.
 
 Domain DNS uses the SSH gateway by default. Set `SSH_GATEWAY_DNS_PROXY=DIRECT` to query a public resolver from the router's ordinary WAN path instead of sending DNS through the endpoint. This setting accepts `SSH-Gateway` or `DIRECT`. Choose TCP DNS, DNS-over-TLS or DNS-over-HTTPS that can answer the configured names; public DNS works only for publicly published names, while private zones need a reachable internal resolver.
+
+IPv4 `server` addresses in the private SSH inventory are automatically added
+to both transparent-capture bypass and the Mihomo source-route loop guard.
+Adding or removing a device updates that set with the inventory. Keep
+`BYPASS_SOURCE_CIDRS` for other client exemptions. For hostname-based endpoints,
+manually add their stable source IPv4 address because it cannot be inferred.
 
 `BYPASS_SOURCE_MODE=gateway` has these effects:
 
@@ -113,7 +120,9 @@ mihomo-router gateway use phone-a
 
 `gateway check` validates configuration, not actual connectivity. The core persists the selected endpoint across reboots. Both internal routing and its DNS refer to that fixed selection.
 
-From the main LAN, open the example URL `http://192.168.50.1:19090/ui/` and enter the locally stored controller token. The page selects internal endpoints and subscription nodes. A selected endpoint is a routing choice, not proof that it is reachable. Changes affect new connections; reconnect existing sessions.
+From the main LAN, open the example URL `http://192.168.50.1:19090/ui/` and enter the locally stored controller token. The page selects internal endpoints and subscription nodes. In **管理出口设备**, add an endpoint by entering its stable IPv4 address, SSH port, username, alias, and verified Ed25519 host public key. The router reuses the existing private key and does not test reachability while saving. Removing a device updates the endpoint list and loop-prevention rules together; the current choice moves to a remaining endpoint if needed.
+
+A selected endpoint is a routing choice, not proof that it is reachable. Changes affect new connections; reconnect existing sessions. Keep this interface on the trusted LAN and use a private controller token.
 
 To deploy a later repository version from the management machine:
 
@@ -138,6 +147,6 @@ The repository includes a [TAP client test helper](../test/tap-client.sh) for ma
 
 A client's own tunnel normally encapsulates internal requests before the router sees them. The router classifies the outer connection's address and domain. If the remote server itself matches a managed internal target, that outer connection can still use the shared SSH gateway.
 
-The router does not detect which clients have enabled their own tunnel. To exempt a known client from shared internal routing, add its reserved source address to `BYPASS_SOURCE_CIDRS` and retain `gateway` mode for ordinary public proxying. Guest ingress continues through the ordinary WAN path.
+The router does not detect which clients have enabled their own tunnel. To exempt a known client from shared internal routing, add its reserved source address to `BYPASS_SOURCE_CIDRS` and retain `gateway` mode for ordinary public proxying. IPv4 endpoint addresses are derived from the private inventory; use this setting for additional client exemptions or hostname-based SSH endpoints. Guest ingress continues through the ordinary WAN path.
 
 This controller primarily manages IPv4, and SSH outbounds carry TCP. It is not a full IP tunnel. Routed IPv6, UDP and other protocol requirements need separate design and acceptance.

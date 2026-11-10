@@ -5,8 +5,10 @@ panel_down() {
     done
     iptables_delete_all filter MR_PANEL_INPUT
     # Migrate the earlier router-local port-specific hook.
-    while "$IPTABLES" -w 5 -t filter -C INPUT -p tcp --dport 19090 -j MR_PANEL >/dev/null 2>&1; do
-        "$IPTABLES" -w 5 -t filter -D INPUT -p tcp --dport 19090 -j MR_PANEL >/dev/null 2>&1 || break
+    for panel_legacy_port in 19090 19091; do
+        while "$IPTABLES" -w 5 -t filter -C INPUT -p tcp --dport "$panel_legacy_port" -j MR_PANEL >/dev/null 2>&1; do
+            "$IPTABLES" -w 5 -t filter -D INPUT -p tcp --dport "$panel_legacy_port" -j MR_PANEL >/dev/null 2>&1 || break
+        done
     done
     iptables_delete_all filter MR_PANEL
 }
@@ -31,5 +33,8 @@ panel_up() {
     "$IPTABLES" -w 5 -t filter -A MR_PANEL -j REJECT || die "cannot protect panel"
     "$IPTABLES" -w 5 -t filter -N MR_PANEL_INPUT || die "cannot create panel dispatcher"
     "$IPTABLES" -w 5 -t filter -A MR_PANEL_INPUT -p tcp --dport "$panel_port" -j MR_PANEL || die "cannot dispatch panel"
+    if [ "$SSH_GATEWAY_ENABLED" = 1 ]; then
+        "$IPTABLES" -w 5 -t filter -A MR_PANEL_INPUT -p tcp --dport 19091 -j MR_PANEL || die "cannot dispatch device management API"
+    fi
     "$IPTABLES" -w 5 -t filter -I INPUT 1 -j MR_PANEL_INPUT || die "cannot attach panel guard"
 }

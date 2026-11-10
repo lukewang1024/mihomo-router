@@ -53,11 +53,14 @@ install_dir "$DEST_ROOT/etc/init.d"
 install_dir "$DEST_ROOT/data/mihomo-router/bin"
 install_dir "$DEST_ROOT/data/mihomo-router/share"
 install_dir "$DEST_ROOT/data/mihomo-router/share/ui"
+install_dir "$DEST_ROOT/data/mihomo-router/share/cgi-bin"
+install_dir "$DEST_ROOT/data/mihomo-router/admin-http/cgi-bin"
 cp "$SCRIPT_DIR/share/ui/index.html" "$DEST_ROOT/data/mihomo-router/share/ui/index.html"
+cp "$SCRIPT_DIR/share/cgi-bin/gateway-admin" "$DEST_ROOT/data/mihomo-router/admin-http/cgi-bin/gateway-admin"
 
 cp "$SCRIPT_DIR/share/ssh-gateway.sh" "$SCRIPT_DIR/share/ssh-gateway-overlay.awk" "$DEST_ROOT/data/mihomo-router/share/"
 cp "$SCRIPT_DIR/etc/ssh-gateways.yaml.example" "$DEST_ROOT/data/mihomo-router/share/"
-cp "$SCRIPT_DIR/share/ai-overlay.awk" "$SCRIPT_DIR/share/panel.sh" "$DEST_ROOT/data/mihomo-router/share/"
+cp "$SCRIPT_DIR/share/ai-overlay.awk" "$SCRIPT_DIR/share/panel.sh" "$SCRIPT_DIR/openwrt/mihomo-router-admin.init" "$DEST_ROOT/data/mihomo-router/share/"
 cp "$SCRIPT_DIR/share/domestic-overlay.awk" "$DEST_ROOT/data/mihomo-router/share/domestic-overlay.awk"
 cp "$SCRIPT_DIR/bin/mihomo-router" "$DEST_ROOT/data/mihomo-router/bin/mihomo-router"
 cp "$SCRIPT_DIR/openwrt/mihomo-router.init" "$DEST_ROOT/data/mihomo-router/share/mihomo-router.init"
@@ -67,7 +70,9 @@ cp "$SCRIPT_DIR/etc/mihomo-router.conf.example" "$DEST_ROOT/data/mihomo-router/s
 chmod 755 "$DEST_ROOT/data/mihomo-router/bin/mihomo-router" \
 	"$DEST_ROOT/data/mihomo-router/bin/mihomo-router-boot" \
 	"$DEST_ROOT/data/mihomo-router/bin/mihomo-router-boot-include" \
-	"$DEST_ROOT/data/mihomo-router/share/mihomo-router.init"
+	"$DEST_ROOT/data/mihomo-router/share/mihomo-router.init" \
+    "$DEST_ROOT/data/mihomo-router/share/mihomo-router-admin.init" \
+    "$DEST_ROOT/data/mihomo-router/admin-http/cgi-bin/gateway-admin"
 MIHOMO_ROUTER_ROOT=${DEST_ROOT%/} "$DEST_ROOT/data/mihomo-router/bin/mihomo-router-boot" setup
 
 if [ -n "$SUBSCRIPTION_ARG" ]; then

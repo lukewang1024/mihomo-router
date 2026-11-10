@@ -23,6 +23,9 @@ setup() {
 	cp "$MR/share/mihomo-router.init" "$ROOT/etc/init.d/mihomo-router.new"
 	chmod 755 "$ROOT/etc/init.d/mihomo-router.new"
 	mv "$ROOT/etc/init.d/mihomo-router.new" "$ROOT/etc/init.d/mihomo-router"
+	cp "$MR/share/mihomo-router-admin.init" "$ROOT/etc/init.d/mihomo-router-admin.new"
+	chmod 755 "$ROOT/etc/init.d/mihomo-router-admin.new"
+	mv "$ROOT/etc/init.d/mihomo-router-admin.new" "$ROOT/etc/init.d/mihomo-router-admin"
 	# Retire the one-off recovery hook used before this helper was packaged.
 	if [ -r "$ROOT/data/auto_start.sh" ] && grep -q '^/bin/sh /data/mihomo-router/bin/boot-include$' "$ROOT/data/auto_start.sh"; then
 		sed '\|^/bin/sh /data/mihomo-router/bin/boot-include$|d' "$ROOT/data/auto_start.sh" >"$ROOT/data/auto_start.sh.new"
@@ -73,6 +76,7 @@ disable_shellcrash() {
 
 register_boot() {
 	/etc/init.d/mihomo-router enable
+	/etc/init.d/mihomo-router-admin enable
 	# Xiaomi rebuilds /etc from firmware at boot. Its firewall configuration
 	# persists, so this include reconstructs the service after /data is mounted.
 	if command -v uci >/dev/null 2>&1; then
@@ -128,6 +132,25 @@ start_service() {
 	done
 	if [ "$started" = 0 ]; then
 		"$MR/bin/mihomo-router" firewall-up
+	fi
+	if [ -x /etc/init.d/mihomo-router-admin ]; then
+		admin_running=0
+		if command -v ubus >/dev/null 2>&1; then
+			for admin_service_name in mihomo-router-admin mihomo-router-admin.init; do
+				admin_state=$(ubus call service list "{\"name\":\"$admin_service_name\"}" 2>/dev/null || :)
+				if printf '%s\n' "$admin_state" | grep -Eq '"running"[[:space:]]*:[[:space:]]*true'; then
+					admin_running=1
+					break
+				fi
+			done
+		elif /etc/init.d/mihomo-router-admin status >/dev/null 2>&1; then
+			admin_running=1
+		fi
+		if [ "${SSH_GATEWAY_ENABLED:-0}" = 1 ]; then
+			[ "$admin_running" = 1 ] || /etc/init.d/mihomo-router-admin start
+		else
+			[ "$admin_running" = 0 ] || /etc/init.d/mihomo-router-admin stop
+		fi
 	fi
 }
 

@@ -340,11 +340,15 @@ this feature does not add IPv6 interception or encrypted-DNS blocking.
 The default management API listens on `127.0.0.1:19090` on the router. Port 9090
 is commonly occupied by Xiaomi's datacenter service. A lightweight gateway dashboard is shipped in `share/ui/index.html`. Set
 `DASHBOARD_DIR=/data/mihomo-router/share/ui` to serve it at `/ui/`; it displays
-active gateway devices and routes and switches devices without restarting.
-It does not require external assets or send credentials to another service. The API can be accessed through an SSH tunnel:
+active gateway devices and routes and switches the selected device without a
+restart. Adding or removing a device applies the updated inventory and restarts
+Mihomo. It does not require external assets or send credentials to another service.
+Endpoint management uses a separate LAN-bound CGI listener on port 19091 and
+the same controller token. Keep both management ports on trusted interfaces.
+The API can be accessed through an SSH tunnel:
 
 ```sh
-ssh -N -L 19090:127.0.0.1:19090 YOUR_ROUTER_SSH_HOST
+ssh -N -L 19090:127.0.0.1:19090 -L 19091:127.0.0.1:19091 YOUR_ROUTER_SSH_HOST
 ```
 
 A compatible dashboard can then connect to `http://127.0.0.1:19090` on the SSH
@@ -527,8 +531,11 @@ it in that browser. A private onboarding link may use `#secret=TOKEN`; the fragm
 is not sent to the web server and is removed from browser history after loading.
 The page never embeds a deployment token in public HTML. It shows actual rules
 from the running core and clearly distinguishes selection from endpoint health.
-Changing the inventory still requires editing the private provider file and
-reloading the core; it does not expose SSH credentials in the browser.
+The trusted-LAN device panel can add and remove SSH endpoints. It writes the
+private provider inventory, validates the staged Mihomo config, restarts the
+core, and synchronizes endpoint source addresses with loop prevention. The
+panel accepts an already verified Ed25519 host key and does not probe endpoint
+reachability or expose the router's private SSH key.
 
 The same page lists subscription proxy groups. Manual selectors support node
 changes; automatic/fallback/load-balancing groups show their current state.
@@ -549,19 +556,22 @@ are debug/info/warning/error/silent. Existing logs are not discarded automatical
 
 ### Preventing gateway traffic from looping back
 
-Reserve each SSH/VPN endpoint's LAN address and put its `/32` in the private
-`BYPASS_SOURCE_CIDRS` setting, for example:
+Reserve each SSH/VPN endpoint's LAN address. IPv4 addresses from the SSH endpoint
+inventory are added automatically. Use the private `BYPASS_SOURCE_CIDRS` setting
+for additional client exemptions, for example:
 
 ```sh
 BYPASS_SOURCE_CIDRS="192.168.31.50/32"
 ```
 
-With the default `BYPASS_SOURCE_MODE=all`, this excludes the endpoint's own traffic from managed DNS, Fake-IP, private
-prefix capture, TCP redirection and UDP marking. It is independent of the
-selected gateway; list all endpoint source addresses that need this treatment.
-The endpoint must resolve names and reach its destinations through its own
-network/VPN, without relying on this router's proxy. Cached Fake-IP answers on
-an excluded endpoint may need to expire before its own applications recover.
+With the default `BYPASS_SOURCE_MODE=all`, this excludes the endpoint's own
+traffic from managed DNS, Fake-IP, private prefix capture, TCP redirection and
+UDP marking. It is independent of the
+selected gateway. Hostname-based SSH endpoints need a manual source CIDR because
+their source address cannot be derived from the inventory. The endpoint must
+resolve names and reach its destinations through its own network/VPN, without
+relying on this router's proxy. Cached Fake-IP answers on an excluded endpoint
+may need to expire before its own applications recover.
 
 Without this exclusion, a gateway's outbound traffic can re-enter transparent
 capture. Depending on endpoint VPN/proxy routing, repeated connections can
@@ -584,7 +594,7 @@ Clear stale client DNS/connection caches after changing DNS ownership.
 The optional `MR_INGRESS` chains return excluded sources to the vendor's normal
 firewall processing; they do not globally accept packets or bypass vendor
 security. Teardown removes these chains even after the exclusion list changes.
-No endpoint addresses are discovered or committed automatically.
+Endpoint source addresses are derived at runtime from the private inventory; no per-device source entries need to be copied into router.conf.
 
 ### Main Wi-Fi with a direct guest network
 

@@ -332,7 +332,9 @@ normalize_gateway_config() {
     gateway_settings || return 1
     validate_source_bypasses
     gateway_bypass_sources=
-    [ "$BYPASS_SOURCE_MODE" != gateway ] || gateway_bypass_sources=$BYPASS_SOURCE_CIDRS
+    if [ "$BYPASS_SOURCE_MODE" = gateway ]; then
+        gateway_bypass_sources=$(gateway_effective_source_cidrs)
+    fi
     normalize_policy_config "$1" "$2.policy" || { rm -f "$2.policy"; return 1; }
     awk -v devices="$SSH_GATEWAY_FILE" -v cidrs="$SSH_GATEWAY_CIDRS" \
         -v domains="$SSH_GATEWAY_DOMAINS" -v resolver="$SSH_GATEWAY_DNS" \
@@ -486,12 +488,16 @@ firewall_up() {
 	firewall_down
     nat_ingress=PREROUTING
     mangle_ingress=PREROUTING
-    if [ -n "$BYPASS_SOURCE_CIDRS" ]; then
+    source_bypass_cidrs=$BYPASS_SOURCE_CIDRS
+    if [ "$SSH_GATEWAY_ENABLED" = 1 ]; then
+        source_bypass_cidrs=$(gateway_effective_source_cidrs)
+    fi
+    if [ -n "$source_bypass_cidrs" ]; then
         nat_ingress=MR_INGRESS
         mangle_ingress=MR_INGRESS
         for ingress_table in nat mangle; do
             "$IPTABLES" -w 5 -t "$ingress_table" -N MR_INGRESS || die "cannot create source bypass chain"
-            for source_cidr in $BYPASS_SOURCE_CIDRS; do
+            for source_cidr in $source_bypass_cidrs; do
                 if [ "$BYPASS_SOURCE_MODE" = all ]; then
                     "$IPTABLES" -w 5 -t "$ingress_table" -A MR_INGRESS -s "$source_cidr" -j RETURN || die "cannot bypass endpoint source"
                 else

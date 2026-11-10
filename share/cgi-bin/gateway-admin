@@ -1,0 +1,97 @@
+#!/bin/sh
+
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+umask 077
+
+CONFIG_FILE=/data/mihomo-router/router.conf
+[ -r "$CONFIG_FILE" ] || {
+    printf 'Status: 503 Service Unavailable\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n\r\n{"error":"router configuration unavailable"}\n'
+    exit 0
+}
+. "$CONFIG_FILE"
+
+secret=${CONTROLLER_SECRET:-${SSH_GATEWAY_API_SECRET:-}}
+origin=http://${CONTROLLER_ADDRESS:-127.0.0.1:19090}
+request_origin=${HTTP_ORIGIN:-}
+allow_origin=
+[ "$request_origin" = "$origin" ] && allow_origin=$origin
+
+headers() {
+    printf 'Status: %s\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n' "$1"
+    if [ -n "$allow_origin" ]; then
+        printf 'Access-Control-Allow-Origin: %s\r\n' "$allow_origin"
+        printf 'Vary: Origin\r\n'
+        printf 'Access-Control-Allow-Headers: Authorization, Content-Type\r\n'
+        printf 'Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\n'
+    fi
+    printf '\r\n'
+}
+
+respond() {
+    headers "$1"
+    printf '%s\n' "$2"
+    exit 0
+}
+
+if [ "${REQUEST_METHOD:-GET}" = OPTIONS ]; then
+    [ -n "$allow_origin" ] || respond '403 Forbidden' '{"error":"origin denied"}'
+    headers '204 No Content'
+    exit 0
+fi
+
+[ -n "$allow_origin" ] || {
+    [ -z "$request_origin" ] || respond '403 Forbidden' '{"error":"origin denied"}'
+}
+[ -n "$secret" ] || respond '503 Service Unavailable' '{"error":"management authentication is not configured"}'
+[ "${HTTP_AUTHORIZATION:-}" = "Bearer $secret" ] || respond '401 Unauthorized' '{"error":"unauthorized"}'
+[ "${SSH_GATEWAY_ENABLED:-0}" = 1 ] || respond '503 Service Unavailable' '{"error":"SSH gateway is disabled"}'
+
+router=/data/mihomo-router/bin/mihomo-router
+case ${REQUEST_METHOD:-GET} in
+    GET)
+        if ! device_json=$("$router" gateway list-json 2>/dev/null); then
+            respond '503 Service Unavailable' '{"error":"cannot read gateway inventory"}'
+        fi
+        headers '200 OK'
+        printf '%s\n' "$device_json"
+        ;;
+    POST|DELETE)
+        length=${CONTENT_LENGTH:-0}
+        case "$length" in ''|*[!0-9]*) respond '400 Bad Request' '{"error":"invalid request size"}' ;; esac
+        [ "$length" -gt 0 ] && [ "$length" -le 8192 ] || respond '413 Payload Too Large' '{"error":"request must be between 1 and 8192 bytes"}'
+        run_dir=${RUN_DIR:-/tmp/mihomo-router}
+        mkdir -p "$run_dir"
+        body_file=$(mktemp "$run_dir/gateway-admin-body.XXXXXX")
+        result_file=$(mktemp "$run_dir/gateway-admin-result.XXXXXX")
+        trap 'rm -f "$body_file" "$result_file"' 0
+        trap 'exit 1' HUP INT TERM
+        dd bs=1 count="$length" of="$body_file" 2>/dev/null
+        name=$(jsonfilter -i "$body_file" -e '@.name' 2>/dev/null || :)
+        [ -n "$name" ] || respond '400 Bad Request' '{"error":"device alias is required"}'
+        if [ "${REQUEST_METHOD}" = POST ]; then
+            server=$(jsonfilter -i "$body_file" -e '@.server' 2>/dev/null || :)
+            port=$(jsonfilter -i "$body_file" -e '@.port' 2>/dev/null || :)
+            username=$(jsonfilter -i "$body_file" -e '@.username' 2>/dev/null || :)
+            host_key=$(jsonfilter -i "$body_file" -e '@.hostKey' 2>/dev/null || :)
+            [ -n "$server$port$username$host_key" ] || respond '400 Bad Request' '{"error":"server, port, username and hostKey are required"}'
+            if "$router" gateway add "$name" "$server" "$port" "$username" "$host_key" >"$result_file" 2>&1; then
+                headers '200 OK'
+                printf '%s\n' '{"ok":true,"message":"device added; endpoint reachability was not checked"}'
+            else
+                respond '400 Bad Request' '{"error":"device was not added; check the fields and router configuration"}'
+            fi
+        else
+            if "$router" gateway remove "$name" >"$result_file" 2>&1; then
+                headers '200 OK'
+                printf '%s\n' '{"ok":true,"message":"device removed"}'
+            else
+                respond '400 Bad Request' '{"error":"device was not removed; the last device cannot be removed"}'
+            fi
+        fi
+        ;;
+    *)
+        respond '405 Method Not Allowed' '{"error":"method not allowed"}'
+        ;;
+esac
