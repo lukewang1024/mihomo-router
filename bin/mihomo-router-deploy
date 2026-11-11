@@ -25,6 +25,7 @@ usage:
   mihomo-router-deploy tailscale-install --host HOST
   mihomo-router-deploy tailscale-register --host HOST
   mihomo-router-deploy tailscale-status --host HOST
+  mihomo-router-deploy tailscale-exit-node --host HOST enable|disable
 
 Environment:
   MIHOMO_ROUTER_HOST    SSH host, required unless --host is supplied
@@ -229,7 +230,7 @@ while [ "$#" -gt 0 ]; do
 			break
 			;;
 		*)
-			[ "$command_name" != gateway ] || break
+			case "$command_name" in gateway|tailscale-exit-node) break ;; esac
 			usage >&2
 			exit 2
 			;;
@@ -247,6 +248,11 @@ case "$command_name" in
 	tailscale-install) upload_tailscale ;;
 	tailscale-register) "$DEPLOY_SSH" "$ROUTER_HOST" '/data/tailscale-wol/tailscale-control.sh register' ;;
 	tailscale-status) "$DEPLOY_SSH" "$ROUTER_HOST" '/data/tailscale-wol/tailscale-control.sh status' ;;
+	tailscale-exit-node)
+		case ${1:-} in enable|disable) ;; *) die "tailscale-exit-node requires enable or disable" ;; esac
+		[ "$#" -eq 1 ] || die "tailscale-exit-node takes one action"
+		"$DEPLOY_SSH" "$ROUTER_HOST" "/data/tailscale-wol/tailscale-control.sh exit-node $1"
+		;;
 	gateway)
 		case ${1:-} in
 			init|check|status|list-json)

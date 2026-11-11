@@ -38,11 +38,32 @@ To inspect the result:
 The router-side command is /data/tailscale-wol/tailscale-control.sh; its
 register, status, start, and stop actions can also be used from a router shell.
 
+## Optional exit node
+
+A registered router can advertise itself as a selectable Tailnet exit node:
+
+    ./bin/mihomo-router-deploy tailscale-exit-node --host ROUTER_SSH_HOST enable
+
+Clients keep their current direct route until a user chooses this exit node in
+Tailscale. This bundled minimal build supports userspace exit routing for TCP
+and UDP. It does not route other IP protocols, and exit traffic leaves through
+the router's normal WAN path; it does not pass through the Mihomo rules that
+capture forwarded LAN traffic. A Linux build with OS router support is required
+for kernel-mode routing and for source-based Mihomo interception.
+
+The Tailnet administrator may need to approve the router as an exit node in
+the admin console. To withdraw the advertisement later, run the same command
+with `disable`. This minimal build cannot select an exit node itself, so its
+own `ExitNodeOption` status may remain false after the routes are approved;
+check availability in a normal client’s exit-node picker. IPv6 exit service
+requires working IPv6 forwarding and upstream IPv6 connectivity on the router.
+
 ## Storage and upgrade notes
 
-The compressed client is stored on /data/userdisk because the R6500's
-/data/other_vol partition has little free space. The active executable is
-verified and extracted to /tmp on startup. Tailscale's persistent identity
+The compressed client is stored below /data/userdisk when space permits. The
+installer reuses a valid archive already at /data/tailscale-wol/bin to avoid
+requiring a second archive-sized block of flash space. The active executable
+is verified and extracted to /tmp on startup. Tailscale's persistent identity
 stays under /data/tailscale-wol/state; never copy this directory between
 routers or commit it.
 

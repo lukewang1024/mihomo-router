@@ -33,6 +33,16 @@ archive_actual=$(openssl dgst -sha256 "$SCRIPT_DIR/$ARCHIVE" | awk '{print $NF}'
 archive_expected=$(awk 'NR == 1 { print $1 }' "$SCRIPT_DIR/$ARCHIVE.sha256")
 [ "$archive_actual" = "$archive_expected" ] || die "archive checksum mismatch"
 
+binary_expected=$(awk 'NR == 1 { print $1 }' "$SCRIPT_DIR/tailscaled.sha256")
+existing_archive=$DATA_DIR/bin/tailscaled.xz
+if [ -r "$existing_archive" ]; then
+	existing_archive_actual=$(openssl dgst -sha256 "$existing_archive" | awk '{print $NF}')
+	if [ "$existing_archive_actual" = "$archive_expected" ]; then
+		# Reuse a valid installed payload when the router lacks spare flash space.
+		PAYLOAD_DIR=$DATA_DIR/bin
+	fi
+fi
+
 mkdir -p "$DATA_DIR/bin" "$DATA_DIR/share" "$DATA_DIR/state" "$PAYLOAD_DIR"
 chmod 700 "$DATA_DIR/state" "$PAYLOAD_DIR"
 
@@ -54,14 +64,15 @@ if [ "$replace_archive" = 1 ]; then
 	archive_actual=$(openssl dgst -sha256 "$archive_tmp" | awk '{print $NF}')
 	[ "$archive_actual" = "$archive_expected" ] || die "copied archive checksum mismatch"
 	binary_actual=$(xz -dc "$archive_tmp" | openssl dgst -sha256 | awk '{print $NF}')
-	binary_expected=$(awk 'NR == 1 { print $1 }' "$SCRIPT_DIR/tailscaled.sha256")
 	[ "$binary_actual" = "$binary_expected" ] || die "uncompressed binary checksum mismatch"
 	mv "$archive_tmp" "$archive_current"
 fi
 cp "$SCRIPT_DIR/tailscaled.sha256" "$DATA_DIR/bin/tailscaled.sha256.new"
 chmod 644 "$DATA_DIR/bin/tailscaled.sha256.new"
 mv "$DATA_DIR/bin/tailscaled.sha256.new" "$DATA_DIR/bin/tailscaled.sha256"
-ln -sfn "$PAYLOAD_DIR/tailscaled.xz" "$DATA_DIR/bin/tailscaled.xz"
+if [ "$PAYLOAD_DIR/tailscaled.xz" != "$DATA_DIR/bin/tailscaled.xz" ]; then
+	ln -sfn "$PAYLOAD_DIR/tailscaled.xz" "$DATA_DIR/bin/tailscaled.xz"
+fi
 
 install_file "$SCRIPT_DIR/tailscale-control.sh" "$DATA_DIR/tailscale-control.sh"
 install_file "$SCRIPT_DIR/bin/boot-run.sh" "$DATA_DIR/bin/boot-run.sh"

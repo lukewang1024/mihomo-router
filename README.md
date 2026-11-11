@@ -96,10 +96,11 @@ existing SSH service on Tailnet-only TCP port 2222 using Tailscale Serve.
 tailscale-status reports the current device state.
 
 The bundled 1.104.1-ax3600-minimal ARM64 client runs in userspace networking
-mode. Registration explicitly declines Tailnet DNS and route acceptance and
-does not enable Tailscale SSH or advertise subnet/exit-node routes. The
-router's private node state remains on the device and is never copied from
-another router. See the Tailscale add-on details in contrib/tailscale/README.md.
+mode by default. Registration explicitly declines Tailnet DNS and route
+acceptance and does not enable Tailscale SSH or advertise subnet/exit-node
+routes. The optional exit-node command advertises the bundled userspace
+TCP/UDP exit node without selecting it on any client. See its routing limits
+in contrib/tailscale/README.md.
 
 ## Commands
 
