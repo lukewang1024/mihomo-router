@@ -36,7 +36,10 @@ gateway_settings() {
 }
 
 gateway_inventory_source_cidrs() {
-    awk '
+    gateway_source_status=$(gateway_api 2>/dev/null || :)
+    gateway_source_selected=$($JSONFILTER -s "$gateway_source_status" -e '@.now' 2>/dev/null || :)
+    [ -n "$gateway_source_selected" ] || gateway_source_selected=$(gateway_inventory_first_name)
+    awk -v target="$gateway_source_selected" '
         function clean(v) {
             sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+#.*$/, "", v); sub(/[[:space:]]+$/, "", v)
             if (v ~ /^\047.*\047$/) { sub(/^\047/, "", v); sub(/\047$/, "", v) }
@@ -48,12 +51,12 @@ gateway_inventory_source_cidrs() {
             for(i=1;i<=4;i++) if(a[i]!~/^[0-9]+$/ || a[i]>255) return 0
             return 1
         }
-        /^  - name:/ { in_proxy=1; next }
+        /^  - name:/ { name=clean(substr($0,index($0,":")+1)); in_proxy=1; next }
         in_proxy && /^    server:/ {
             v=$0; sub(/^    server:[[:space:]]*/,"",v); v=clean(v)
-            if(ipv4(v)) found[v "/32"]=1
+            if(name==target && ipv4(v)) found=v "/32"
         }
-        END { for(v in found) print v }
+        END { if(found!="") print found }
     ' "$SSH_GATEWAY_FILE"
 }
 
@@ -116,7 +119,7 @@ gateway_inventory_json() {
 }
 
 gateway_validate_name() {
-    awk -v value="$1" 'length(value)>0 && length(value)<=48 && value ~ /^[A-Za-z0-9]([A-Za-z0-9_. -]*[A-Za-z0-9])?$/ { ok=1 } END { exit !ok }'
+    awk -v value="$1" 'BEGIN { exit !(length(value)>0 && length(value)<=48 && value ~ /^[A-Za-z0-9]([A-Za-z0-9_. -]*[A-Za-z0-9])?$/) }'
 }
 
 gateway_validate_ipv4() {
@@ -133,6 +136,7 @@ gateway_mutation_cleanup() {
             /data/mihomo-router/bin/mihomo-router-boot restart >/dev/null 2>&1 || :
             if [ -n "$gateway_mutation_old_selected" ]; then
                 gateway_api -X PUT -H 'Content-Type: application/json' --data '{"name":"'"$gateway_mutation_old_selected"'"}' >/dev/null 2>&1 || :
+                firewall_up >/dev/null 2>&1 || :
             fi
         fi
     fi
@@ -253,6 +257,7 @@ gateway_mutate() (
         gateway_mutation_selected=$(gateway_inventory_first_name)
     fi
     gateway_api -X PUT -H 'Content-Type: application/json' --data '{"name":"'"$gateway_mutation_selected"'"}' >/dev/null || die 'could not restore a valid current gateway selection'
+    firewall_up || die 'could not synchronize loop-prevention rules after gateway inventory update'
     gateway_mutation_status=$(gateway_api) || die 'gateway API unavailable after inventory update'
     gateway_mutation_all=$($JSONFILTER -s "$gateway_mutation_status" -e '@.all[*]' 2>/dev/null || :)
     printf '%s\n' "$gateway_mutation_all" | grep -Fx "$gateway_mutation_selected" >/dev/null || die 'selected gateway is missing from the running selector'
@@ -268,7 +273,9 @@ gateway_mutate() (
     gateway_mutation_changed=0
 )
 
-gateway_api() (
+gateway_api_request() (
+    gateway_api_path=$1
+    shift
     ensure_dirs
     # Keep API authentication out of process arguments and inherited proxies.
     gateway_curl_config=$(mktemp "$RUN_DIR/gateway-curl.XXXXXX") || return 1
@@ -282,12 +289,72 @@ gateway_api() (
         printf 'header = "Authorization: Bearer %s"\n' "$SSH_GATEWAY_API_SECRET" >"$gateway_curl_config"
     fi
     "$CURL" --config "$gateway_curl_config" --noproxy '*' -fsS --connect-timeout 3 --max-time 10 "$@" \
-        "http://$CONTROLLER_ADDRESS/proxies/SSH-Gateway"
+        "http://$CONTROLLER_ADDRESS$gateway_api_path"
     gateway_api_rc=$?
     rm -f "$gateway_curl_config"
     return "$gateway_api_rc"
 )
 
+gateway_api() {
+    gateway_api_request /proxies/SSH-Gateway "$@"
+}
+
+gateway_select_cleanup() {
+    gateway_select_rc=$?
+    trap - 0
+    if [ "$gateway_select_committed" != 1 ] && [ "$gateway_select_changed" = 1 ]; then
+        if [ -n "$gateway_select_old" ]; then
+            gateway_api -X PUT -H 'Content-Type: application/json' --data '{"name":"'"$gateway_select_old"'"}' >/dev/null 2>&1 || :
+        fi
+        if [ "$gateway_select_runtime_installed" = 1 ] && [ -r "$gateway_select_runtime_backup" ]; then
+            cp "$gateway_select_runtime_backup" "$RUNTIME_CONFIG" 2>/dev/null || :
+            if ! gateway_api_request '/configs?force=true' -X PUT -H 'Content-Type: application/json' --data '{"path":"'"$RUNTIME_CONFIG"'","payload":""}' >/dev/null 2>&1; then
+                /data/mihomo-router/bin/mihomo-router-boot restart >/dev/null 2>&1 || :
+            fi
+        fi
+        firewall_up >/dev/null 2>&1 || :
+    fi
+    [ -z "$gateway_select_runtime_next" ] || rm -f "$gateway_select_runtime_next"
+    [ -z "$gateway_select_runtime_backup" ] || rm -f "$gateway_select_runtime_backup"
+    exit "$gateway_select_rc"
+}
+
+gateway_select_device() (
+    gateway_select_name=$1
+    gateway_select_old=
+    gateway_select_changed=0
+    gateway_select_committed=0
+    gateway_select_runtime_installed=0
+    gateway_select_runtime_next=
+    gateway_select_runtime_backup=
+    trap 'gateway_select_cleanup' 0
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    [ "$SSH_GATEWAY_ENABLED" = 1 ] || die 'SSH gateway is disabled'
+    gateway_validate_name "$gateway_select_name" || die 'invalid gateway device name'
+    gateway_inventory_name_exists "$gateway_select_name" || die 'gateway device not found'
+    gateway_select_status=$(gateway_api) || die 'gateway API unavailable; verify running config and API secret'
+    gateway_select_old=$($JSONFILTER -s "$gateway_select_status" -e '@.now' 2>/dev/null || :)
+    [ -n "$gateway_select_old" ] || gateway_select_old=$(gateway_inventory_first_name)
+    gateway_select_changed=1
+    gateway_api -X PUT -H 'Content-Type: application/json' --data '{"name":"'"$gateway_select_name"'"}' >/dev/null || die 'gateway selection request failed; inspect gateway status'
+    firewall_up || die 'gateway selected, but loop-prevention firewall rules could not be synchronized'
+
+    gateway_select_runtime_next=$(mktemp "$RUNTIME_CONFIG.select.XXXXXX") || die 'cannot stage selected gateway config'
+    gateway_select_runtime_backup=$(mktemp "$RUNTIME_CONFIG.rollback.XXXXXX") || die 'cannot save current runtime config'
+    cp "$RUNTIME_CONFIG" "$gateway_select_runtime_backup" || die 'cannot back up current runtime config'
+    prepare_domestic_rules || die 'cannot prepare managed routing rules'
+    normalize_config "$ACTIVE_CONFIG" "$gateway_select_runtime_next" || die 'cannot generate selected gateway config'
+    validate_config "$gateway_select_runtime_next" || die 'selected gateway config failed validation'
+    gateway_select_runtime_installed=1
+    mv "$gateway_select_runtime_next" "$RUNTIME_CONFIG" || die 'cannot activate selected gateway config'
+    gateway_api_request '/configs?force=true' -X PUT -H 'Content-Type: application/json' --data '{"path":"'"$RUNTIME_CONFIG"'","payload":""}' >/dev/null || die 'Mihomo rejected the selected gateway config reload'
+    gateway_select_status=$(gateway_api) || die 'gateway API unavailable after config reload'
+    gateway_select_current=$($JSONFILTER -s "$gateway_select_status" -e '@.now' 2>/dev/null || :)
+    [ "$gateway_select_current" = "$gateway_select_name" ] || die 'selected gateway changed during config reload'
+    gateway_select_committed=1
+    printf 'SSH gateway selected and firewall/config loop-prevention rules synchronized: %s\n' "$gateway_select_name"
+)
 gateway_command() {
     case ${1:-} in
         init)
@@ -321,11 +388,7 @@ gateway_command() {
             ;;
         use)
             [ "$#" -eq 2 ] || die 'gateway use requires a device name'
-            [ "$SSH_GATEWAY_ENABLED" = 1 ] || die 'SSH gateway is disabled'
-            gateway_validate_name "$2" || die 'invalid gateway device name'
-            # Names are restricted above, so the JSON string needs no extra escaping.
-            gateway_api -X PUT -H 'Content-Type: application/json' --data '{"name":"'"$2"'"}' || die 'gateway selection request failed; inspect gateway status'
-            printf 'SSH gateway selected: %s\n' "$2"
+            gateway_select_device "$2"
             ;;
         check)
             [ "$#" -eq 1 ] || die 'gateway check takes no arguments'

@@ -341,9 +341,10 @@ this feature does not add IPv6 interception or encrypted-DNS blocking.
 The default management API listens on `127.0.0.1:19090` on the router. Port 9090
 is commonly occupied by Xiaomi's datacenter service. A lightweight gateway dashboard is shipped in `share/ui/index.html`. Set
 `DASHBOARD_DIR=/data/mihomo-router/share/ui` to serve it at `/ui/`; it displays
-active gateway devices and routes and switches the selected device without a
-restart. Adding or removing a device applies the updated inventory and restarts
-Mihomo. It does not require external assets or send credentials to another service.
+active gateway devices and routes. A switch reloads the generated Mihomo
+configuration and synchronizes the selected endpoint's loop-prevention rule
+without restarting the core. Adding or removing a device applies the updated
+inventory and restarts Mihomo. It does not require external assets or send credentials to another service.
 Endpoint management uses a separate LAN-bound CGI listener on port 19091 and
 the same controller token. Keep both management ports on trusted interfaces.
 The API can be accessed through an SSH tunnel:
@@ -557,22 +558,26 @@ are debug/info/warning/error/silent. Existing logs are not discarded automatical
 
 ### Preventing gateway traffic from looping back
 
-Reserve each SSH/VPN endpoint's LAN address. IPv4 addresses from the SSH endpoint
-inventory are added automatically. Use the private `BYPASS_SOURCE_CIDRS` setting
-for additional client exemptions, for example:
+Reserve each SSH/VPN endpoint's LAN address. The selected SSH endpoint's IPv4
+address is added automatically to loop prevention. Other registered endpoints
+remain ordinary LAN clients and can use the currently selected SSH gateway. The
+Dashboard and `mihomo-router gateway use` update this rule when the selection
+changes. Use the private `BYPASS_SOURCE_CIDRS` setting for additional client
+exemptions, for example:
 
 ```sh
 BYPASS_SOURCE_CIDRS="192.168.31.50/32"
 ```
 
-With the default `BYPASS_SOURCE_MODE=all`, this excludes the endpoint's own
-traffic from managed DNS, Fake-IP, private prefix capture, TCP redirection and
-UDP marking. It is independent of the
-selected gateway. Hostname-based SSH endpoints need a manual source CIDR because
-their source address cannot be derived from the inventory. The endpoint must
-resolve names and reach its destinations through its own network/VPN, without
-relying on this router's proxy. Cached Fake-IP answers on an excluded endpoint
-may need to expire before its own applications recover.
+With the default `BYPASS_SOURCE_MODE=all`, the selected endpoint's own traffic is
+excluded from managed DNS, Fake-IP, private prefix capture, TCP redirection and
+UDP marking. In `gateway` mode, only its configured gateway destinations bypass
+capture; its public traffic still follows subscription rules. Hostname-based SSH
+endpoints need a manual source CIDR because their source address cannot be
+derived from the inventory. The endpoint must resolve names and reach its
+destinations through its own network/VPN, without relying on this router's
+proxy. Cached Fake-IP answers on an excluded endpoint may need to expire before
+its own applications recover.
 
 Without this exclusion, a gateway's outbound traffic can re-enter transparent
 capture. Depending on endpoint VPN/proxy routing, repeated connections can

@@ -70,6 +70,15 @@ case ${REQUEST_METHOD:-GET} in
         dd bs=1 count="$length" of="$body_file" 2>/dev/null
         name=$(jsonfilter -i "$body_file" -e '@.name' 2>/dev/null || :)
         [ -n "$name" ] || respond '400 Bad Request' '{"error":"device alias is required"}'
+        action=$(jsonfilter -i "$body_file" -e '@.action' 2>/dev/null || :)
+        if [ "${REQUEST_METHOD}" = POST ] && [ "$action" = use ]; then
+            if "$router" gateway use "$name" >"$result_file" 2>&1; then
+                headers '200 OK'
+                printf '%s\n' '{"ok":true,"message":"outbound selected; Mihomo config and loop-prevention rules synchronized"}'
+            else
+                respond '400 Bad Request' '{"error":"outbound selection or loop-prevention update failed"}'
+            fi
+        fi
         if [ "${REQUEST_METHOD}" = POST ]; then
             server=$(jsonfilter -i "$body_file" -e '@.server' 2>/dev/null || :)
             port=$(jsonfilter -i "$body_file" -e '@.port' 2>/dev/null || :)

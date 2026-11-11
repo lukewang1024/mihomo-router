@@ -362,8 +362,10 @@
     disableControls();
     notice('正在切换：' + name + '…');
     let failure;
-    try { await api('/proxies/' + encodeURIComponent(name), { method: 'PUT', body: JSON.stringify({ name: target }) }); }
-    catch (error) { failure = error; }
+    try {
+      if (name === group) await adminApi('POST', { action: 'use', name: target });
+      else await api('/proxies/' + encodeURIComponent(name), { method: 'PUT', body: JSON.stringify({ name: target }) });
+    } catch (error) { failure = error; }
     busy = false;
     await refresh();
     $('refresh').disabled = false;

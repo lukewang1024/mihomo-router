@@ -39,6 +39,10 @@ die() {
 	exit 1
 }
 
+validate_gateway_cli_name() {
+	printf '%s\n' "$1" | awk 'length($0)>0 && length($0)<=48 && $0 ~ /^[A-Za-z0-9]([A-Za-z0-9_. -]*[A-Za-z0-9])?$/ { ok=1 } END { exit !ok }' || die "invalid gateway device name"
+}
+
 read_subscription_stdin() {
 	IFS= read -r SUBSCRIPTION_URL || :
 	[ -n "$SUBSCRIPTION_URL" ] || die "subscription URL is empty"
@@ -262,12 +266,12 @@ case "$command_name" in
 				;;
 			remove)
 				[ "$#" -eq 2 ] || die "gateway remove requires an alias"
-				case $2 in ''|-*|*[!a-zA-Z0-9_.\ -]*) die "invalid gateway device name" ;; esac
+				validate_gateway_cli_name "$2"
 				"$DEPLOY_SSH" "$ROUTER_HOST" "/data/mihomo-router/bin/mihomo-router gateway remove '$2'"
 				;;
 			use)
 				[ "$#" -eq 2 ] || die "gateway use requires a device name"
-				case $2 in ''|-*|*[!a-zA-Z0-9_.\ -]*) die "invalid gateway device name" ;; esac
+				validate_gateway_cli_name "$2"
 				"$DEPLOY_SSH" "$ROUTER_HOST" "/data/mihomo-router/bin/mihomo-router gateway use '$2'"
 				;;
 			*) die "gateway requires init, check, status, list-json, use DEVICE or remove ALIAS" ;;

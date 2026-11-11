@@ -87,11 +87,14 @@ Use precise target prefixes instead of classifying entire large address ranges a
 
 Domain DNS uses the SSH gateway by default. Set `SSH_GATEWAY_DNS_PROXY=DIRECT` to query a public resolver from the router's ordinary WAN path instead of sending DNS through the endpoint. This setting accepts `SSH-Gateway` or `DIRECT`. Choose TCP DNS, DNS-over-TLS or DNS-over-HTTPS that can answer the configured names; public DNS works only for publicly published names, while private zones need a reachable internal resolver.
 
-IPv4 `server` addresses in the private SSH inventory are automatically added
-to both transparent-capture bypass and the Mihomo source-route loop guard.
-Adding or removing a device updates that set with the inventory. Keep
-`BYPASS_SOURCE_CIDRS` for other client exemptions. For hostname-based endpoints,
-manually add their stable source IPv4 address because it cannot be inferred.
+The currently selected endpoint's IPv4 `server` address is automatically added
+to loop prevention. Other registered endpoints remain ordinary LAN clients and
+can use the selected SSH gateway. Selecting an endpoint in the Dashboard or with
+`mihomo-router gateway use` reloads the generated Mihomo config and synchronizes
+firewall loop prevention without restarting the core.
+Keep `BYPASS_SOURCE_CIDRS` for other client exemptions. For hostname-based
+endpoints, manually add their stable source IPv4 address because it cannot be
+inferred from the inventory.
 
 `BYPASS_SOURCE_MODE=gateway` has these effects:
 
@@ -147,6 +150,6 @@ The repository includes a [TAP client test helper](../test/tap-client.sh) for ma
 
 A client's own tunnel normally encapsulates internal requests before the router sees them. The router classifies the outer connection's address and domain. If the remote server itself matches a managed internal target, that outer connection can still use the shared SSH gateway.
 
-The router does not detect which clients have enabled their own tunnel. To exempt a known client from shared internal routing, add its reserved source address to `BYPASS_SOURCE_CIDRS` and retain `gateway` mode for ordinary public proxying. IPv4 endpoint addresses are derived from the private inventory; use this setting for additional client exemptions or hostname-based SSH endpoints. Guest ingress continues through the ordinary WAN path.
+The router does not detect which clients have enabled their own tunnel. To exempt a known client from shared internal routing, add its reserved source address to `BYPASS_SOURCE_CIDRS` and retain `gateway` mode for ordinary public proxying. The currently selected SSH endpoint is protected automatically; other registered endpoints follow the shared gateway like other LAN clients. Use the manual setting for additional client exemptions or hostname-based SSH endpoints. Guest ingress continues through the ordinary WAN path.
 
 This controller primarily manages IPv4, and SSH outbounds carry TCP. It is not a full IP tunnel. Routed IPv6, UDP and other protocol requirements need separate design and acceptance.
