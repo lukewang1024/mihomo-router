@@ -150,6 +150,7 @@ upload_tailscale() {
 		"$tailscale_dir/tailscale-control.sh" \
 		"$tailscale_dir/bin/boot-run.sh" \
 		"$tailscale_dir/bin/run.sh" \
+		"$tailscale_dir/bin/migrate-to-user.sh" \
 		"$tailscale_dir/bin/boot-include" \
 		"$tailscale_dir/openwrt/tailscale-wol.init" \
 		"$ROUTER_HOST:/tmp/mihomo-router-tailscale-upload/"
@@ -158,7 +159,7 @@ upload_tailscale() {
 		stage=/tmp/mihomo-router-tailscale-upload
 		trap '\''rm -rf "$stage"'\'' 0
 		mkdir -p "$stage/bin" "$stage/openwrt"
-		mv "$stage/boot-run.sh" "$stage/run.sh" "$stage/boot-include" "$stage/bin/"
+		mv "$stage/boot-run.sh" "$stage/run.sh" "$stage/migrate-to-user.sh" "$stage/boot-include" "$stage/bin/"
 		mv "$stage/tailscale-wol.init" "$stage/openwrt/"
 		sh "$stage/install.sh"
 	'

@@ -44,7 +44,8 @@ if [ -r "$existing_archive" ]; then
 fi
 
 mkdir -p "$DATA_DIR/bin" "$DATA_DIR/share" "$DATA_DIR/state" "$PAYLOAD_DIR"
-chmod 700 "$DATA_DIR/state" "$PAYLOAD_DIR"
+chmod 755 "$DATA_DIR" "$DATA_DIR/bin" "$DATA_DIR/share" "$PAYLOAD_DIR"
+chmod 700 "$DATA_DIR/state"
 
 archive_tmp=$PAYLOAD_DIR/tailscaled.xz.new
 cleanup() {
@@ -70,6 +71,7 @@ fi
 cp "$SCRIPT_DIR/tailscaled.sha256" "$DATA_DIR/bin/tailscaled.sha256.new"
 chmod 644 "$DATA_DIR/bin/tailscaled.sha256.new"
 mv "$DATA_DIR/bin/tailscaled.sha256.new" "$DATA_DIR/bin/tailscaled.sha256"
+chmod 644 "$archive_current"
 if [ "$PAYLOAD_DIR/tailscaled.xz" != "$DATA_DIR/bin/tailscaled.xz" ]; then
 	ln -sfn "$PAYLOAD_DIR/tailscaled.xz" "$DATA_DIR/bin/tailscaled.xz"
 fi
@@ -77,9 +79,16 @@ fi
 install_file "$SCRIPT_DIR/tailscale-control.sh" "$DATA_DIR/tailscale-control.sh"
 install_file "$SCRIPT_DIR/bin/boot-run.sh" "$DATA_DIR/bin/boot-run.sh"
 install_file "$SCRIPT_DIR/bin/run.sh" "$DATA_DIR/bin/run.sh"
+install_file "$SCRIPT_DIR/bin/migrate-to-user.sh" "$DATA_DIR/bin/migrate-to-user.sh"
 install_file "$SCRIPT_DIR/bin/boot-include" "$DATA_DIR/bin/boot-include"
 install_file "$SCRIPT_DIR/openwrt/tailscale-wol.init" "$DATA_DIR/share/tailscale-wol.init"
 install_file "$DATA_DIR/share/tailscale-wol.init" /etc/init.d/tailscale-wol
+chown -R 454:65534 "$DATA_DIR/state"
+chmod 700 "$DATA_DIR/state"
+if [ -f "$DATA_DIR/exit-node-enabled" ]; then chown 454:65534 "$DATA_DIR/exit-node-enabled"; fi
+mkdir -p /tmp/tailscale-wol
+chown 454:65534 /tmp/tailscale-wol
+chmod 700 /tmp/tailscale-wol
 
 uci set firewall.tailscale_wol=include
 uci set firewall.tailscale_wol.type=script
@@ -90,7 +99,7 @@ uci commit firewall
 /etc/init.d/tailscale-wol enable
 
 if "$DATA_DIR/tailscale-control.sh" is-running; then
-	printf '%s\n' 'Existing Tailscale daemon left running.'
+	"$DATA_DIR/tailscale-control.sh" migrate-user
 else
 	/etc/init.d/tailscale-wol start
 	"$DATA_DIR/tailscale-control.sh" status >/dev/null

@@ -19,6 +19,20 @@ is_running() {
 		kill -0 "$pid" 2>/dev/null
 }
 
+refresh_mihomo_firewall() {
+	manager=/data/mihomo-router/bin/mihomo-router
+	[ -x "$manager" ] || return 0
+	"$manager" firewall-up
+}
+
+schedule_user_migration() {
+	is_running || return 1
+	uid=$(awk '/^Uid:/ { print $2; exit }' "/proc/$pid/status")
+	[ "$uid" = 454 ] && { printf '%s\n' 'Tailscale daemon already uses the dedicated UID.'; return 0; }
+	start-stop-daemon -S -b -m -p /tmp/tailscale-wol/migrate.pid -x /data/tailscale-wol/bin/migrate-to-user.sh
+	printf '%s\n' 'Dedicated-UID restart scheduled; Tailnet access will briefly reconnect.'
+}
+
 start_service() {
 	is_running && return 0
 	/etc/init.d/tailscale-wol start
@@ -70,6 +84,7 @@ connect_tailscale() {
 enable_exit_node() {
 	start_service
 	: >/data/tailscale-wol/exit-node-enabled.new
+	chown 454:65534 /data/tailscale-wol/exit-node-enabled.new
 	chmod 600 /data/tailscale-wol/exit-node-enabled.new
 	if ! apply_tailscale_config true; then
 		rm -f /data/tailscale-wol/exit-node-enabled.new
@@ -80,13 +95,15 @@ enable_exit_node() {
 		apply_tailscale_config false || :
 		return 1
 	fi
-	printf '%s\n' 'Userspace exit-node routes advertised (TCP/UDP). Approve this router in the Tailscale admin console if required.'
+	refresh_mihomo_firewall
+	printf '%s\n' 'Userspace exit-node routes advertised. Mihomo captures exit traffic when TAILSCALE_EXIT_CAPTURE_ENABLED=1. Approve this router in the Tailscale admin console if required.'
 }
 
 disable_exit_node() {
 	start_service
 	apply_tailscale_config false
 	rm -f /data/tailscale-wol/exit-node-enabled
+	refresh_mihomo_firewall
 	printf '%s\n' 'Exit-node routes withdrawn; Tailscale connectivity remains enabled.'
 }
 
@@ -100,6 +117,9 @@ case "$action" in
 	start)
 		start_service
 		printf '%s\n' 'Tailscale daemon is running.'
+		;;
+	migrate-user)
+		schedule_user_migration
 		;;
 	stop)
 		if is_running; then

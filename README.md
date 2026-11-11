@@ -597,6 +597,14 @@ firewall processing; they do not globally accept packets or bypass vendor
 security. Teardown removes these chains even after the exclusion list changes.
 Endpoint source addresses are derived at runtime from the private inventory; no per-device source entries need to be copied into router.conf.
 
+For a Tailscale userspace exit node, set `TAILSCALE_EXIT_CAPTURE_ENABLED=1` in
+`router.conf` and install the Tailscale add-on's dedicated UID service. While
+`/data/tailscale-wol/exit-node-enabled` exists, the firewall captures that
+UID's outgoing TCP and DNS sockets into Mihomo and routes its remaining UDP
+sockets through the Mihomo TUN. Private and Tailnet destinations, plus the
+Tailscale UDP transport port, bypass capture to prevent loops. The router's
+main WAN route remains unchanged. This path currently captures IPv4 only.
+
 ### Main Wi-Fi with a direct guest network
 
 Keep only the main network's IPv4 subnet in `LAN_CIDRS`. For example,

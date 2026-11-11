@@ -56,6 +56,9 @@ ROUTE_TABLE=100
 ROUTE_MARK=0x1ed4
 BYPASS_MARK=0x1ed6
 TCP_PORTS="22,80,443,8080,8443"
+# Enable only when tailscaled runs as the dedicated UID from the Tailscale add-on.
+TAILSCALE_EXIT_CAPTURE_ENABLED=0
+TAILSCALE_UID=454
 
 # Must match/contain dns.fake-ip-range; these destinations require all ports.
 FAKE_IP_CIDR=198.18.0.0/16

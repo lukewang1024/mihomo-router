@@ -59,6 +59,9 @@ ROUTE_TABLE=${ROUTE_TABLE:-100}
 ROUTE_MARK=${ROUTE_MARK:-0x1ed4}
 BYPASS_MARK=${BYPASS_MARK:-0x1ed6}
 TCP_PORTS=${TCP_PORTS:-22,80,443,8080,8443}
+TAILSCALE_EXIT_CAPTURE_ENABLED=${TAILSCALE_EXIT_CAPTURE_ENABLED:-0}
+TAILSCALE_UID=${TAILSCALE_UID:-454}
+TAILSCALE_EXIT_MARKER=${TAILSCALE_EXIT_MARKER:-/data/tailscale-wol/exit-node-enabled}
 # Must cover the DNS fake-ip-range. Synthetic destinations cannot bypass Mihomo.
 FAKE_IP_CIDR=${FAKE_IP_CIDR:-198.18.0.0/16}
 IPTABLES=${IPTABLES:-iptables}
@@ -96,6 +99,8 @@ PID_FILE=$RUN_DIR/manager.pid
 READY_FILE=$RUN_DIR/ready
 TCP_CHAIN=MR_TCP
 MARK_CHAIN=MR_MARK
+TAILSCALE_NAT_CHAIN=MR_TS_OUTPUT
+TAILSCALE_MANGLE_CHAIN=MR_TS_MARK
 
 log() {
 	printf '%s\n' "mihomo-router: $*" >&2
@@ -355,6 +360,12 @@ normalize_config() {
     return "$feature_rc"
 }
 
+validate_tailscale_capture() {
+    case "$TAILSCALE_EXIT_CAPTURE_ENABLED" in 0|1) ;; *) die "TAILSCALE_EXIT_CAPTURE_ENABLED must be 0 or 1" ;; esac
+    case "$TAILSCALE_UID" in ""|*[!0-9]*) die "TAILSCALE_UID must be a numeric UID" ;; esac
+    [ "$TAILSCALE_UID" -gt 0 ] && [ "$TAILSCALE_UID" -le 65535 ] || die "TAILSCALE_UID must be between 1 and 65535"
+}
+
 validate_config() {
 	validate_file=$1
 	validate_mode=${2:-strict}
@@ -427,6 +438,14 @@ iptables_delete_all() {
 
 firewall_down() {
     panel_down
+    while "$IPTABLES" -w 5 -t nat -C OUTPUT -m owner --uid-owner "$TAILSCALE_UID" -j "$TAILSCALE_NAT_CHAIN" >/dev/null 2>&1; do
+        "$IPTABLES" -w 5 -t nat -D OUTPUT -m owner --uid-owner "$TAILSCALE_UID" -j "$TAILSCALE_NAT_CHAIN" >/dev/null 2>&1 || break
+    done
+    while "$IPTABLES" -w 5 -t mangle -C OUTPUT -m owner --uid-owner "$TAILSCALE_UID" -j "$TAILSCALE_MANGLE_CHAIN" >/dev/null 2>&1; do
+        "$IPTABLES" -w 5 -t mangle -D OUTPUT -m owner --uid-owner "$TAILSCALE_UID" -j "$TAILSCALE_MANGLE_CHAIN" >/dev/null 2>&1 || break
+    done
+    iptables_delete_all nat "$TAILSCALE_NAT_CHAIN"
+    iptables_delete_all mangle "$TAILSCALE_MANGLE_CHAIN"
     # These wrappers are owned by us; returning here preserves vendor rules.
     # Remove them even if the current configuration no longer has exclusions.
     for ingress_table in nat mangle; do
@@ -483,6 +502,7 @@ validate_source_bypasses() {
 }
 
 firewall_up() {
+    validate_tailscale_capture
     validate_source_bypasses
     [ "$SSH_GATEWAY_ENABLED" = 0 ] || gateway_settings || die "invalid SSH gateway settings"
 	firewall_down
@@ -524,6 +544,23 @@ firewall_up() {
 		"$IPTABLES" -w 5 -t nat -A "$TCP_CHAIN" -d "$bypass_cidr" -j RETURN || die "cannot install transparent proxy rule"
 		"$IPTABLES" -w 5 -t mangle -A "$MARK_CHAIN" -d "$bypass_cidr" -j RETURN || die "cannot install transparent proxy rule"
 	done
+	if [ "$TAILSCALE_EXIT_CAPTURE_ENABLED" = 1 ] && [ -f "$TAILSCALE_EXIT_MARKER" ]; then
+		"$IPTABLES" -w 5 -t nat -N "$TAILSCALE_NAT_CHAIN" || die "cannot create Tailscale output chain"
+		"$IPTABLES" -w 5 -t mangle -N "$TAILSCALE_MANGLE_CHAIN" || die "cannot create Tailscale output mark chain"
+		for bypass_cidr in $BYPASS_CIDRS; do
+			"$IPTABLES" -w 5 -t nat -A "$TAILSCALE_NAT_CHAIN" -d "$bypass_cidr" -j RETURN || die "cannot install Tailscale destination bypass"
+			"$IPTABLES" -w 5 -t mangle -A "$TAILSCALE_MANGLE_CHAIN" -d "$bypass_cidr" -j RETURN || die "cannot install Tailscale destination bypass"
+		done
+		for dns_proto in tcp udp; do
+			"$IPTABLES" -w 5 -t nat -A "$TAILSCALE_NAT_CHAIN" -p "$dns_proto" --dport 53 -j REDIRECT --to-ports "$DNS_PORT" || die "cannot route Tailscale DNS through Mihomo"
+		done
+		"$IPTABLES" -w 5 -t nat -A "$TAILSCALE_NAT_CHAIN" -p tcp -j REDIRECT --to-ports "$REDIR_PORT" || die "cannot route Tailscale TCP through Mihomo"
+		"$IPTABLES" -w 5 -t mangle -A "$TAILSCALE_MANGLE_CHAIN" -p udp --sport 41641 -j RETURN || die "cannot preserve Tailscale transport"
+		"$IPTABLES" -w 5 -t mangle -A "$TAILSCALE_MANGLE_CHAIN" -p udp --dport 53 -j RETURN || die "cannot preserve Tailscale DNS redirect"
+		"$IPTABLES" -w 5 -t mangle -A "$TAILSCALE_MANGLE_CHAIN" -p udp -j MARK --set-mark "$ROUTE_MARK" || die "cannot route Tailscale UDP through Mihomo"
+		"$IPTABLES" -w 5 -t nat -I OUTPUT 1 -m owner --uid-owner "$TAILSCALE_UID" -j "$TAILSCALE_NAT_CHAIN" || die "cannot attach Tailscale TCP capture"
+		"$IPTABLES" -w 5 -t mangle -I OUTPUT 1 -m owner --uid-owner "$TAILSCALE_UID" -j "$TAILSCALE_MANGLE_CHAIN" || die "cannot attach Tailscale UDP capture"
+	fi
 	if command -v ipset >/dev/null 2>&1 && ipset list "$CN_IPSET" >/dev/null 2>&1; then
 		"$IPTABLES" -w 5 -t nat -A "$TCP_CHAIN" -m set --match-set "$CN_IPSET" dst -j RETURN || die "cannot install transparent proxy rule"
 		"$IPTABLES" -w 5 -t mangle -A "$MARK_CHAIN" -m set --match-set "$CN_IPSET" dst -j RETURN || die "cannot install transparent proxy rule"

@@ -46,10 +46,21 @@ A registered router can advertise itself as a selectable Tailnet exit node:
 
 Clients keep their current direct route until a user chooses this exit node in
 Tailscale. This bundled minimal build supports userspace exit routing for TCP
-and UDP. It does not route other IP protocols, and exit traffic leaves through
-the router's normal WAN path; it does not pass through the Mihomo rules that
-capture forwarded LAN traffic. A Linux build with OS router support is required
-for kernel-mode routing and for source-based Mihomo interception.
+and UDP. The daemon runs under a dedicated UID so Mihomo can identify its
+outbound sockets without changing the router's default WAN route.
+
+To route the exit-node traffic through Mihomo, set
+`TAILSCALE_EXIT_CAPTURE_ENABLED=1` in `/data/mihomo-router/router.conf` and
+restart mihomo-router. The Tailscale installer runs the daemon as UID 454 and
+uses UDP port 41641 for its own WireGuard transport. At startup, the daemon
+reapplies its exit-node preference when the marker exists. While the exit
+marker is present, Mihomo redirects the daemon's outbound TCP and DNS sockets to its
+transparent proxy and sends its other UDP sockets through the Mihomo TUN; the
+Tailscale transport port and private/Tailnet destinations bypass capture to
+prevent loops. Mihomo then applies its normal rules to the exit traffic. The
+router's own default route stays on WAN. IPv6 interception is not configured by
+this IPv4 router manager, so clients should not rely on this exit node for IPv6
+internet access.
 
 The Tailnet administrator may need to approve the router as an exit node in
 the admin console. To withdraw the advertisement later, run the same command

@@ -42,9 +42,25 @@ trap 'exit 0' INT TERM HUP
 GOMEMLIMIT=32MiB GOGC=50 TS_NO_LOGS_NO_SUPPORT=true TS_LOGS_DIR="$RUN" \
 	"$RUN/tailscaled" --tun=userspace-networking --no-logs-no-support \
 	--statedir="$DATA/state" --state="$DATA/state/tailscaled.state" \
-	--socket="$RUN/tailscaled.sock" --port=0 >"$RUN/log.pipe" 2>&1 9>&- &
+	--socket="$RUN/tailscaled.sock" --port=41641 >"$RUN/log.pipe" 2>&1 9>&- &
 daemon_pid=$!
 printf '%s\n' "$daemon_pid" >"$RUN/daemon.pid"
+socket_wait=0
+backend_state=
+while [ "$socket_wait" -lt 20 ]; do
+	kill -0 "$daemon_pid" 2>/dev/null || break
+	if [ -S "$RUN/tailscaled.sock" ]; then
+		backend_state=$("$RUN/tailscale" --socket="$RUN/tailscaled.sock" status --json 2>/dev/null | sed -n 's/^[[:space:]]*"BackendState":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+		[ "$backend_state" = Running ] && break
+	fi
+	socket_wait=$((socket_wait + 1))
+	sleep 1
+done
+if [ "$backend_state" = Running ] && [ -r "$DATA/exit-node-enabled" ]; then
+	"$RUN/tailscale" --socket="$RUN/tailscaled.sock" set \
+		--accept-dns=false --accept-routes=false --ssh=false \
+		--advertise-exit-node=true >"$RUN/log.pipe" 2>&1 || :
+fi
 set +e
 wait "$daemon_pid"
 result=$?
