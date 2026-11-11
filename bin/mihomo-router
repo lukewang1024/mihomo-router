@@ -547,6 +547,12 @@ firewall_up() {
 	if [ "$TAILSCALE_EXIT_CAPTURE_ENABLED" = 1 ] && [ -f "$TAILSCALE_EXIT_MARKER" ]; then
 		"$IPTABLES" -w 5 -t nat -N "$TAILSCALE_NAT_CHAIN" || die "cannot create Tailscale output chain"
 		"$IPTABLES" -w 5 -t mangle -N "$TAILSCALE_MANGLE_CHAIN" || die "cannot create Tailscale output mark chain"
+		# tailscaled resolves through the router's 127.0.0.1 resolver. Capture
+		# that loopback query before the private-destination bypass so exit-node
+		# DNS uses Mihomo (including its ipv6=false behavior) instead of WAN DNS.
+		for dns_proto in tcp udp; do
+			"$IPTABLES" -w 5 -t nat -A "$TAILSCALE_NAT_CHAIN" -d 127.0.0.1/32 -p "$dns_proto" --dport 53 -j REDIRECT --to-ports "$DNS_PORT" || die "cannot route Tailscale loopback DNS through Mihomo"
+		done
 		for bypass_cidr in $BYPASS_CIDRS; do
 			"$IPTABLES" -w 5 -t nat -A "$TAILSCALE_NAT_CHAIN" -d "$bypass_cidr" -j RETURN || die "cannot install Tailscale destination bypass"
 			"$IPTABLES" -w 5 -t mangle -A "$TAILSCALE_MANGLE_CHAIN" -d "$bypass_cidr" -j RETURN || die "cannot install Tailscale destination bypass"

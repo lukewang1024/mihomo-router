@@ -606,9 +606,13 @@ For a Tailscale userspace exit node, set `TAILSCALE_EXIT_CAPTURE_ENABLED=1` in
 `router.conf` and install the Tailscale add-on's dedicated UID service. While
 `/data/tailscale-wol/exit-node-enabled` exists, the firewall captures that
 UID's outgoing TCP and DNS sockets into Mihomo and routes its remaining UDP
-sockets through the Mihomo TUN. Private and Tailnet destinations, plus the
-Tailscale UDP transport port, bypass capture to prevent loops. The router's
-main WAN route remains unchanged. This path currently captures IPv4 only.
+sockets through the Mihomo TUN. Tailscale's loopback DNS requests are
+redirected to Mihomo before private-address bypasses, so the router's DNS
+resolver cannot leak exit-node lookups directly to WAN. The Tailnet service
+address, other private destinations, and Tailscale UDP transport port bypass
+capture to prevent loops. The router's main WAN route remains unchanged. This
+path captures IPv4 only; Mihomo DNS has `ipv6: false`, so domain lookups use
+IPv4, while IPv6 literal destinations are unsupported without IPv6 WAN routing.
 
 ### Main Wi-Fi with a direct guest network
 

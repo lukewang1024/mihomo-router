@@ -55,12 +55,14 @@ restart mihomo-router. The Tailscale installer runs the daemon as UID 454 and
 uses UDP port 41641 for its own WireGuard transport. At startup, the daemon
 reapplies its exit-node preference when the marker exists. While the exit
 marker is present, Mihomo redirects the daemon's outbound TCP and DNS sockets to its
-transparent proxy and sends its other UDP sockets through the Mihomo TUN; the
-Tailscale transport port and private/Tailnet destinations bypass capture to
-prevent loops. Mihomo then applies its normal rules to the exit traffic. The
-router's own default route stays on WAN. IPv6 interception is not configured by
-this IPv4 router manager, so clients should not rely on this exit node for IPv6
-internet access.
+transparent proxy and sends its other UDP sockets through the Mihomo TUN. The
+router's 127.0.0.1 DNS resolver is redirected to Mihomo before private-address
+bypasses, so exit-node DNS uses Mihomo's resolver policy rather than WAN DNS.
+The Tailscale transport port and other private/Tailnet destinations bypass
+capture to prevent loops. The router's own default route stays on WAN. This
+router has no IPv6 WAN route and the capture rules are IPv4-only; Mihomo DNS
+therefore suppresses AAAA answers, but IPv6-literal destinations remain
+unsupported.
 
 The Tailnet administrator may need to approve the router as an exit node in
 the admin console. To withdraw the advertisement later, run the same command
