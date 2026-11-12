@@ -4,11 +4,11 @@ This add-on installs a pinned ARM64 Tailscale client for the Xiaomi routers used
 with mihomo-router. It is independent of Mihomo installation and does not
 authenticate a device during installation.
 
-The bundled archive is the 1.104.1-ax3600-minimal build already running on the
-R6500. It uses Tailscale userspace networking and is launched with the
---tun=userspace-networking option. This deployment is for remote management
-through Tailscale Serve; it does not create a TUN route for LAN clients, accept
-routes, accept Tailnet DNS, advertise subnet routes, or enable Tailscale SSH.
+The bundled ARM64 archive is the 1.104.1 exit-capable build. It uses
+Tailscale userspace networking with --tun=userspace-networking. Installation
+initially provides remote management through Tailscale Serve; it does not
+select an exit node, accept routes or Tailnet DNS, advertise routes, or enable
+Tailscale SSH. The same archive can be used on compatible ARM64 routers.
 
 ## Install and register separately
 
@@ -45,8 +45,10 @@ A registered router can advertise itself as a selectable Tailnet exit node:
     ./bin/mihomo-router-deploy tailscale-exit-node --host ROUTER_SSH_HOST enable
 
 Clients keep their current direct route until a user chooses this exit node in
-Tailscale. This bundled minimal build supports userspace exit routing for TCP
-and UDP. The daemon runs under a dedicated UID so Mihomo can identify its
+Tailscale. This build supports userspace exit routing for TCP and UDP. The
+control command checks that exit-node and advertised-route support were not
+compiled out, and verifies that both exit routes are present in preferences.
+Enabling the exit node preserves the existing device hostname and identity. The daemon runs under a dedicated UID so Mihomo can identify its
 outbound sockets without changing the router's default WAN route.
 
 To route the exit-node traffic through Mihomo, set
@@ -75,13 +77,19 @@ requires working IPv6 forwarding and upstream IPv6 connectivity on the router.
 
 The compressed client is stored below /data/userdisk when space permits. The
 installer reuses a valid archive already at /data/tailscale-wol/bin to avoid
-requiring a second archive-sized block of flash space. The active executable
-is verified and extracted to /tmp on startup. Tailscale's persistent identity
+requiring a second archive-sized block of flash space. An upgrade requires
+enough free space to stage the new archive alongside the existing one; an
+insufficient-space failure leaves the existing archive in place. A running
+daemon is restarted when its executable differs from the installed archive or
+it needs migration to the dedicated UID. The active executable is verified
+and extracted to /tmp on startup. Tailscale's persistent identity
 stays under /data/tailscale-wol/state; never copy this directory between
 routers or commit it.
 
-The bundled client reports version 1.104.1-ax3600-minimal and its extracted
-SHA-256 is recorded in tailscaled.sha256. The archive checksum is recorded
+The bundled client reports long version 1.104.1-ax3600-exit (the label is
+historical; the binary targets Linux ARM64) and its extracted SHA-256 is
+recorded in tailscaled.sha256. See BUILD.md for the source version, Go
+version and build flags. The archive checksum is recorded
 beside the archive. Update both checksums and this version note when replacing
 the binary. Tailscale's upstream CLI and daemon are distributed under
 BSD-3-Clause; see LICENSE.tailscale and the upstream

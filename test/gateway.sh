@@ -99,7 +99,7 @@ done
 has 'nat -A MR_GATEWAY -m mark --mark 0x1ed6 -j RETURN' "$MOCK_LOG"
 has 'nat -A MR_GATEWAY -d 192.168.31.0/24 -j RETURN' "$MOCK_LOG"
 has 'nat -A MR_GATEWAY -s 192.168.31.0/24 -d 10.42.0.0/16 -p tcp -j REDIRECT --to-ports 7892' "$MOCK_LOG"
-awk '/-A PREROUTING -p tcp -j MR_GATEWAY/ {a=NR} /-A PREROUTING -p tcp -m multiport/ {b=NR} END {exit !(a && a<b)}' "$MOCK_LOG" || fail 'private gateway bypass still wins'
+awk '/-A MR_INGRESS -p tcp -j MR_GATEWAY/ {a=NR} /-A MR_INGRESS -p tcp -m multiport/ {b=NR} END {exit !(a && a<b)}' "$MOCK_LOG" || fail 'private gateway bypass still wins'
 "$controller" firewall-down
 has 'nat -F MR_GATEWAY' "$MOCK_LOG"
 has 'nat -X MR_GATEWAY' "$MOCK_LOG"
@@ -152,29 +152,46 @@ printf '%s\n' 'SSH_GATEWAY_CIDRS="10.999.0.0/16"' >>"$MIHOMO_ROUTER_CONFIG"
 [ ! -s "$MOCK_LOG" ] || fail 'invalid settings changed firewall'
 printf '%s\n' 'SSH_GATEWAY_CIDRS="10.42.0.0/16"' >>"$MIHOMO_ROUTER_CONFIG"
 
-# Switching uses the core selector API, without editing nodes or restarting.
+# Switching uses the core selector API and reloads the runtime overlay.
+export MOCK_SELECTION="$TEST_ROOT/selection"
+printf '%s\n' phone-a >"$MOCK_SELECTION"
+cp "$active" "$TEST_ROOT/run/config.yaml"
+cp "$PROJECT_DIR/test/mocks/mihomo" "$TEST_ROOT/run/mihomo"
+chmod +x "$TEST_ROOT/run/mihomo"
+cat >"$TEST_ROOT/jsonfilter" <<'EOF'
+#!/bin/sh
+[ "$1" = -s ] || exit 1
+printf '%s\n' "$2" | sed -n 's/.*"now":"\([^"]*\)".*/\1/p'
+EOF
+chmod +x "$TEST_ROOT/jsonfilter"
 cat >"$TEST_ROOT/api-curl" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$MOCK_LOG"
+[ "${MOCK_API_FAIL:-0}" = 0 ] || exit 22
+payload=
+url=
 while [ "$#" -gt 0 ]; do
-    if [ "$1" = --config ]; then
-        shift
-        [ -f "$1" ] || exit 2
-        grep -q 'Authorization: Bearer fixture-token' "$1" || exit 2
-    fi
+    case "$1" in
+        --config) shift; [ -f "$1" ] || exit 2; grep -q 'Authorization: Bearer fixture-token' "$1" || exit 2 ;;
+        --data) shift; payload=$1 ;;
+        http://*) url=$1 ;;
+    esac
     shift
 done
-[ "${MOCK_API_FAIL:-0}" = 0 ] || exit 22
-printf '%s' '{"now":"phone-a","all":["phone-a","laptop-b"]}'
+case "$url:$payload" in
+    */proxies/SSH-Gateway:*'"name":"laptop-b"'*) printf '%s\n' laptop-b >"$MOCK_SELECTION" ;;
+    */proxies/SSH-Gateway:*'"name":"phone-a"'*) printf '%s\n' phone-a >"$MOCK_SELECTION" ;;
+esac
+printf '{"now":"%s","all":["phone-a","laptop-b"]}' "$(cat "$MOCK_SELECTION")"
 EOF
 chmod +x "$TEST_ROOT/api-curl"
-printf 'CURL=%s\n' "$TEST_ROOT/api-curl" >>"$MIHOMO_ROUTER_CONFIG"
+printf 'CURL=%s\nJSONFILTER=%s\n' "$TEST_ROOT/api-curl" "$TEST_ROOT/jsonfilter" >>"$MIHOMO_ROUTER_CONFIG"
 : >"$MOCK_LOG"
 "$controller" gateway use laptop-b >/dev/null
 has 'PUT.*{"name":"laptop-b"}.*http://127.0.0.1:19090/proxies/SSH-Gateway' "$MOCK_LOG"
 if grep -q fixture-token "$MOCK_LOG"; then fail 'API secret leaked into arguments'; fi
 "$controller" gateway status >"$TEST_ROOT/status"
-has '"now":"phone-a"' "$TEST_ROOT/status"
+has '"now":"laptop-b"' "$TEST_ROOT/status"
 "$controller" gateway use 'bad"name' >/dev/null 2>&1 && fail 'unsafe device name accepted'
 MOCK_API_FAIL=1 "$controller" gateway use laptop-b >/dev/null 2>&1 && fail 'failed selection reported success'
 [ "$inventory_sum" = "$(cksum "$inventory")" ] || fail 'switch changed inventory'
@@ -189,7 +206,7 @@ chmod +x "$TEST_ROOT/ssh"
 : >"$MOCK_LOG"
 MIHOMO_ROUTER_SSH=$TEST_ROOT/ssh "$PROJECT_DIR/bin/mihomo-router-deploy" gateway --host home-router use laptop-b
 has '^home-router$' "$MOCK_LOG"
-has '^/data/mihomo-router/bin/mihomo-router gateway use laptop-b$' "$MOCK_LOG"
+has "^/data/mihomo-router/bin/mihomo-router gateway use 'laptop-b'$" "$MOCK_LOG"
 : >"$MOCK_LOG"
 MIHOMO_ROUTER_SSH=$TEST_ROOT/ssh "$PROJECT_DIR/bin/mihomo-router-deploy" gateway --host home-router use 'name;invalid' >/dev/null 2>&1 && fail 'remote command injection accepted'
 [ ! -s "$MOCK_LOG" ] || fail 'invalid selection reached SSH'

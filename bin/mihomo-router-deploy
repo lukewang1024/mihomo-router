@@ -10,6 +10,7 @@ ROUTER_HOST=${MIHOMO_ROUTER_HOST:-}
 SOURCE_DIR=${MIHOMO_ROUTER_SOURCE:-$(CDPATH='' cd "$SCRIPT_DIR/.." && pwd)}
 SUBSCRIPTION_URL=
 DEPLOY_SSH=${MIHOMO_ROUTER_SSH:-ssh}
+DEPLOY_SCP=${MIHOMO_ROUTER_SCP:-scp}
 
 usage() {
 	cat <<'EOF'
@@ -31,6 +32,7 @@ Environment:
   MIHOMO_ROUTER_HOST    SSH host, required unless --host is supplied
   MIHOMO_ROUTER_SOURCE  mihomo-router checkout (default: this repository)
   MIHOMO_ROUTER_SSH     SSH executable (default: ssh)
+  MIHOMO_ROUTER_SCP     SCP executable (default: scp)
 EOF
 }
 
@@ -79,7 +81,7 @@ upload_runtime() {
 	[ -r "$SOURCE_DIR/share/domestic-overlay.awk" ] || die "missing domestic overlay"
 	"$DEPLOY_SSH" "$ROUTER_HOST" 'mkdir -p /tmp/mihomo-router-upload; chmod 700 /tmp/mihomo-router-upload'
 
-	scp -O \
+	"$DEPLOY_SCP" -O \
 		"$SOURCE_DIR/bin/mihomo-router" \
 		"$SOURCE_DIR/bin/mihomo-router-boot" \
 		"$SOURCE_DIR/bin/mihomo-router-boot-include" \
@@ -141,15 +143,15 @@ REMOTE_SCRIPT
 upload_tailscale() {
 	tailscale_dir=$SOURCE_DIR/contrib/tailscale
 	[ -r "$tailscale_dir/install.sh" ] || die "missing Tailscale installer"
-	[ -r "$tailscale_dir/tailscaled-1.104.1-ax3600-minimal-arm64.xz" ] || die "missing pinned Tailscale archive"
-	[ -r "$tailscale_dir/tailscaled-1.104.1-ax3600-minimal-arm64.xz.sha256" ] || die "missing archive checksum"
+	[ -r "$tailscale_dir/tailscaled-1.104.1-exit-arm64.xz" ] || die "missing pinned Tailscale archive"
+	[ -r "$tailscale_dir/tailscaled-1.104.1-exit-arm64.xz.sha256" ] || die "missing archive checksum"
 	[ -r "$tailscale_dir/tailscaled.sha256" ] || die "missing binary checksum"
 	[ -r "$tailscale_dir/tailscale-control.sh" ] || die "missing Tailscale controller"
 	"$DEPLOY_SSH" "$ROUTER_HOST" 'mkdir -p /tmp/mihomo-router-tailscale-upload; chmod 700 /tmp/mihomo-router-tailscale-upload'
-	scp -O \
+	"$DEPLOY_SCP" -O \
 		"$tailscale_dir/install.sh" \
-		"$tailscale_dir/tailscaled-1.104.1-ax3600-minimal-arm64.xz" \
-		"$tailscale_dir/tailscaled-1.104.1-ax3600-minimal-arm64.xz.sha256" \
+		"$tailscale_dir/tailscaled-1.104.1-exit-arm64.xz" \
+		"$tailscale_dir/tailscaled-1.104.1-exit-arm64.xz.sha256" \
 		"$tailscale_dir/tailscaled.sha256" \
 		"$tailscale_dir/tailscale-control.sh" \
 		"$tailscale_dir/bin/boot-run.sh" \

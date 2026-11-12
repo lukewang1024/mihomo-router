@@ -28,9 +28,14 @@ refresh_mihomo_firewall() {
 schedule_user_migration() {
 	is_running || return 1
 	uid=$(awk '/^Uid:/ { print $2; exit }' "/proc/$pid/status")
-	[ "$uid" = 454 ] && { printf '%s\n' 'Tailscale daemon already uses the dedicated UID.'; return 0; }
+	actual=$(openssl dgst -sha256 "$RUN/tailscaled" | awk '{print $NF}')
+	expected=$(awk 'NR == 1 {print $1}' /data/tailscale-wol/bin/tailscaled.sha256)
+	if [ "$uid" = 454 ] && [ "$actual" = "$expected" ]; then
+		printf '%s\n' 'Tailscale daemon already uses the dedicated UID and installed binary.'
+		return 0
+	fi
 	start-stop-daemon -S -b -m -p /tmp/tailscale-wol/migrate.pid -x /data/tailscale-wol/bin/migrate-to-user.sh
-	printf '%s\n' 'Dedicated-UID restart scheduled; Tailnet access will briefly reconnect.'
+	printf '%s\n' 'Tailscale upgrade or dedicated-UID restart scheduled; Tailnet access will briefly reconnect.'
 }
 
 start_service() {
@@ -60,14 +65,7 @@ apply_tailscale_config() {
 		--accept-dns=false \
 		--accept-routes=false \
 		--ssh=false \
-		--advertise-exit-node="$advertise_exit_node" || return $?
-	"$RUN/tailscale" --socket="$SOCKET" up \
-		--accept-dns=false \
-		--accept-routes=false \
-		--advertise-exit-node="$advertise_exit_node" \
-		--ssh=false \
-		--hostname=ax3600-wol \
-		--netfilter-mode=off || return $?
+		--advertise-exit-node="$advertise_exit_node"
 }
 
 connect_tailscale() {
@@ -77,18 +75,46 @@ connect_tailscale() {
 		--accept-routes=false \
 		--advertise-exit-node="$advertise_exit_node" \
 		--ssh=false \
-		--hostname=ax3600-wol \
 		--netfilter-mode=off
+}
+
+verify_exit_support() {
+	build_info=$("$RUN/tailscale" debug go-buildinfo 2>/dev/null) || {
+		printf '%s\n' 'Cannot inspect the installed Tailscale build.' >&2
+		return 1
+	}
+	case "$build_info" in
+		*ts_omit_advertiseexitnode*|*ts_omit_advertiseroutes*)
+			printf '%s\n' 'Installed Tailscale was built without exit-node routing support; upgrade it first.' >&2
+			return 1
+			;;
+	esac
+}
+
+advertises_exit_routes() {
+	"$RUN/tailscale" --socket="$SOCKET" debug prefs | awk '
+		/"AdvertiseRoutes":[[:space:]]*\[/ { in_routes=1; next }
+		in_routes && /"0\.0\.0\.0\/0"/ { v4=1 }
+		in_routes && /"::\/0"/ { v6=1 }
+		in_routes && /\]/ { exit !(v4 && v6) }
+		END { if (!(v4 && v6)) exit 1 }'
 }
 
 enable_exit_node() {
 	start_service
+	verify_exit_support
 	: >/data/tailscale-wol/exit-node-enabled.new
 	chown 454:65534 /data/tailscale-wol/exit-node-enabled.new
 	chmod 600 /data/tailscale-wol/exit-node-enabled.new
 	if ! apply_tailscale_config true; then
 		rm -f /data/tailscale-wol/exit-node-enabled.new
 		apply_tailscale_config false || :
+		return 1
+	fi
+	if ! advertises_exit_routes; then
+		rm -f /data/tailscale-wol/exit-node-enabled.new
+		apply_tailscale_config false || :
+		printf '%s\n' 'Tailscale did not enable both exit-node routes.' >&2
 		return 1
 	fi
 	if ! mv /data/tailscale-wol/exit-node-enabled.new /data/tailscale-wol/exit-node-enabled; then

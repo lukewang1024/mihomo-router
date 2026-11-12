@@ -5,7 +5,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH='' cd "$(dirname "$0")" && pwd)
 DATA_DIR=/data/tailscale-wol
 PAYLOAD_DIR=/data/userdisk/tailscale-wol/bin
-ARCHIVE=tailscaled-1.104.1-ax3600-minimal-arm64.xz
+ARCHIVE=tailscaled-1.104.1-exit-arm64.xz
 
 die() {
 	printf '%s\n' "tailscale install: ERROR: $*" >&2
