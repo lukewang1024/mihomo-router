@@ -72,6 +72,11 @@ cp "$SCRIPT_DIR/tailscaled.sha256" "$DATA_DIR/bin/tailscaled.sha256.new"
 chmod 644 "$DATA_DIR/bin/tailscaled.sha256.new"
 mv "$DATA_DIR/bin/tailscaled.sha256.new" "$DATA_DIR/bin/tailscaled.sha256"
 chmod 644 "$archive_current"
+# A reused archive may be reached through a symlink into a private payload
+# directory. Allow traversal without making directory contents listable.
+if [ "$(readlink "$DATA_DIR/bin/tailscaled.xz" 2>/dev/null || :)" = /data/userdisk/tailscale-wol/bin/tailscaled.xz ]; then
+	chmod 711 /data/userdisk/tailscale-wol /data/userdisk/tailscale-wol/bin
+fi
 if [ "$PAYLOAD_DIR/tailscaled.xz" != "$DATA_DIR/bin/tailscaled.xz" ]; then
 	ln -sfn "$PAYLOAD_DIR/tailscaled.xz" "$DATA_DIR/bin/tailscaled.xz"
 fi
